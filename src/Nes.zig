@@ -10,8 +10,11 @@ const AnyMapper = @import("Mapper.zig");
 
 /// NROM
 const Mapper0 = struct {
+    // Only one page for now
+    // TODO
     prg_rom: [0x4000]u8,
-    chr_rom: [0x2000]u8,
+
+    // TODO: PPU
 
     const S = @This();
 
@@ -20,16 +23,21 @@ const Mapper0 = struct {
         return try util.alloc.create(S);
     }
 
+    const mirror_mask = 0xbfff;
+
     pub fn read(self: *S, addr: u16) u8 {
-        _ = self;
-        _ = addr;
-        return 0;
+        if (addr < 0x8000) {
+            // Maybe RAM, or invalid
+            // TODO: open bus behavior?
+            @panic("low PRG address");
+        }
+        const masked = addr & mirror_mask;
+        return self.prg_rom[masked];
     }
 
     pub fn write(self: *S, addr: u16, data: u8) void {
-        _ = self;
-        _ = addr;
-        _ = data;
+        const masked = addr & mirror_mask;
+        self.prg_rom[masked] = data;
     }
 
     pub fn destroy(self: *S) void {
