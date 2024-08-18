@@ -50,14 +50,58 @@ const Mapper0 = struct {
 };
 
 fn busRead(self: *Self, addr: u16) u8 {
-    _ = self;
-    _ = addr;
+    switch (addr) {
+        0...0x1fff => {
+            // Read from CPU memory
+            const masked = addr & 0x7ff;
+            return self.cpu_ram[masked];
+        },
+        0x2000...0x3fff => {
+            // PPU registers
+            // TODO
+            @panic("PPU registers");
+        },
+        0x4000...0x4017 => {
+            // APU and I/O registers
+            // TODO
+            @panic("APU and I/O");
+        },
+        0x4018...0x401f => {
+            // Disabled functionality
+            @panic("disabled functionality");
+        },
+        0x4020...0xffff => {
+            return self.m.read(addr);
+        },
+    }
+    unreachable;
 }
 
 fn busWrite(self: *Self, addr: u16, val: u8) void {
-    _ = self;
-    _ = addr;
-    _ = val;
+    switch (addr) {
+        0...0x1fff => {
+            // Read from CPU memory
+            const masked = addr & 0x7ff;
+            self.cpu_mem[masked] = val;
+        },
+        0x2000...0x3fff => {
+            // PPU registers
+            // TODO
+            @panic("PPU registers");
+        },
+        0x4000...0x4017 => {
+            // APU and I/O registers
+            // TODO
+            @panic("APU and I/O");
+        },
+        0x4018...0x401f => {
+            // Disabled functionality
+            @panic("disabled functionality");
+        },
+        0x4020...0xffff => {
+            self.m.write(addr, val);
+        },
+    }
 }
 
 /// Initializes an NES from iNES data.
