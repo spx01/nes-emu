@@ -3,24 +3,33 @@ const util = @import("util.zig");
 
 m: AnyMapper,
 cpu_ram: *[0x800]u8,
+cpu: Cpu,
 
 const Self = @This();
 
 const AnyMapper = @import("Mapper.zig");
 
+const page_size = 0x4000;
+
+const log = std.log.scoped(.@"nes-core");
+
 /// NROM
 const Mapper0 = struct {
     // Only one page for now
     // TODO
-    prg_rom: [0x4000]u8,
+    prg_rom: [page_size]u8,
 
     // TODO: PPU
 
     const S = @This();
 
-    pub fn create() !*S {
-        // TODO:
-        return try util.alloc.create(S);
+    pub fn create(prg_data_stream: std.io.AnyReader) !*S {
+        // TODO: maybe the mapper should receive the entire ROM file?
+        const ret = try util.alloc.create(S);
+        errdefer util.alloc.destroy(ret);
+        const cnt = try prg_data_stream.read(&ret.prg_rom);
+        if (cnt != page_size) return error.ROMData;
+        return ret;
     }
 
     const mirror_mask = 0xbfff;
@@ -31,7 +40,7 @@ const Mapper0 = struct {
             // TODO: open bus behavior?
             @panic("low PRG address");
         }
-        const masked = addr & mirror_mask;
+        const masked = (addr & mirror_mask) - 0x8000;
         return self.prg_rom[masked];
     }
 
@@ -54,6 +63,56 @@ const Mapper0 = struct {
                 .deinit = @ptrCast(&S.destroy),
             },
         };
+    }
+};
+
+const Cpu = struct {
+    a: u8,
+    x: u8,
+    y: u8,
+    pc: u16,
+    s: u8,
+    p: Flags,
+
+    const Flags = packed struct(u8) {
+        /// Carry
+        c: u1 = 0,
+        /// Zero
+        z: u1 = 0,
+        /// Interrupt Disable
+        i: u1 = 1,
+        /// B Flag
+        b: u1 = 0,
+        _always_1: u1 = 1,
+        /// Overflow
+        v: u1 = 0,
+        /// Negative
+        n: u1 = 0,
+        /// Pad to 8 bits
+        _pad: u1 = 0,
+    };
+
+    const S = @This();
+    // in case we move this somewhere else
+    const Nes = Self;
+
+    /// Reset has to be run as well before reaching the powerup state
+    pub fn init() S {
+        return .{
+            .a = 0,
+            .x = 0,
+            .y = 0,
+            .pc = 0,
+            .s = 0,
+            .p = .{},
+        };
+    }
+
+    pub fn reset(self: *S, n: *Nes) void {
+        self.p.i = 1;
+        // TODO: implement wide reads
+        self.pc = n.busRead(0xfffc) | (@as(u16, n.busRead(0xfffd)) << 8);
+        self.s = @subWithOverflow(self.s, 3)[0];
     }
 };
 
@@ -164,7 +223,15 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
     var ret: @This() = undefined;
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
-    ret.m = (try Mapper0.create()).any();
+    errdefer util.alloc.destroy(ret.cpu_ram);
+
+    ret.m = (try Mapper0.create(reader)).any();
+    errdefer ret.m.deinit();
+
+    ret.cpu = Cpu.init();
+    ret.cpu.reset(&ret);
+
+    log.info("initialized an NES", .{});
     return ret;
 }
 

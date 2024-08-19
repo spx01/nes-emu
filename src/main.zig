@@ -8,4 +8,6 @@ pub fn main() !void {
 
     var machine = try Nes.fromRom(rom_file.reader().any());
     defer machine.deinit();
+
+    std.debug.print("pc is 0x{x}\n", .{machine.cpu.pc});
 }
