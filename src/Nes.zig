@@ -120,6 +120,7 @@ const Cpu = struct {
     }
 
     pub fn log_state(self: *S) void {
+        // multiline string literals broken or PEBKAC
         cpu_log.debug(@embedFile("./cpu_state_fmt.txt"), .{
             self.pc,
             self.s,
