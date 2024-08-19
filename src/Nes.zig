@@ -12,6 +12,7 @@ const AnyMapper = @import("Mapper.zig");
 const page_size = 0x4000;
 
 const log = std.log.scoped(.@"nes-core");
+const cpu_log = std.log.scoped(.@"nes-cpu");
 
 /// NROM
 const Mapper0 = struct {
@@ -81,6 +82,8 @@ const Cpu = struct {
         z: u1 = 0,
         /// Interrupt Disable
         i: u1 = 1,
+        /// Decimal
+        d: u1 = 0,
         /// B Flag
         b: u1 = 0,
         _always_1: u1 = 1,
@@ -88,8 +91,10 @@ const Cpu = struct {
         v: u1 = 0,
         /// Negative
         n: u1 = 0,
-        /// Pad to 8 bits
-        _pad: u1 = 0,
+
+        pub fn val(self: Flags) u8 {
+            return @as(u8, @bitCast(self));
+        }
     };
 
     const S = @This();
@@ -110,9 +115,25 @@ const Cpu = struct {
 
     pub fn reset(self: *S, n: *Nes) void {
         self.p.i = 1;
-        // TODO: implement wide reads
-        self.pc = n.busRead(0xfffc) | (@as(u16, n.busRead(0xfffd)) << 8);
-        self.s = @subWithOverflow(self.s, 3)[0];
+        self.pc = n.busReadWide(0xfffc);
+        self.s -%= 3;
+    }
+
+    pub fn log_state(self: *S) void {
+        cpu_log.debug(@embedFile("./cpu_state_fmt.txt"), .{
+            self.pc,
+            self.s,
+            self.a,
+            self.x,
+            self.y,
+            self.p.val(),
+            if (self.p.c == 1) "C" else "_",
+            if (self.p.z == 1) "Z" else "_",
+            if (self.p.i == 1) "I" else "_",
+            if (self.p.d == 1) "D" else "_",
+            if (self.p.v == 1) "V" else "_",
+            if (self.p.n == 1) "N" else "_",
+        });
     }
 };
 
@@ -142,6 +163,17 @@ fn busRead(self: *Self, addr: u16) u8 {
         },
     }
     unreachable;
+}
+
+/// Doesn't deal with page wrapping
+fn busReadWide(self: *Self, addr: u16) u16 {
+    if (addr == 0xffff) {
+        @panic("wide read out of bounds");
+    }
+    const lower = self.busRead(addr);
+    // TODO: is it fine for this to ever overflow?
+    const upper = self.busRead(addr +% 1);
+    return lower | @as(u16, upper) << 8;
 }
 
 fn busWrite(self: *Self, addr: u16, val: u8) void {
@@ -232,6 +264,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     ret.cpu.reset(&ret);
 
     log.info("initialized an NES", .{});
+    ret.cpu.log_state();
     return ret;
 }
 
