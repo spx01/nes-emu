@@ -67,6 +67,40 @@ const Mapper0 = struct {
     }
 };
 
+const instr = struct {
+    const Operand = union(enum) {
+        implicit: void,
+        acc: void,
+
+        page0: u8,
+        abs: u16,
+        ind: u16,
+        rel: u8,
+        imm: u8,
+
+        // addr = page0(arg + x)
+        page0_x: u8,
+        page0_y: u8,
+
+        // addr = arg + x
+        abs_x: u16,
+        abs_y: u16,
+
+        // addr = *page0(arg + x) | *page0(arg + x + 1) << 8
+        idx_ind: u8,
+
+        // addr = (*page0(arg) | *page0(arg + 1) << 8) + y
+        ind_idx: u8,
+    };
+
+    const Mode = std.meta.Tag(Operand);
+
+    pub fn decode(op: u8) !Mode {
+        _ = op;
+        return .implicit;
+    }
+};
+
 const Cpu = struct {
     a: u8,
     x: u8,
