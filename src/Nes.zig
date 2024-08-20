@@ -116,7 +116,7 @@ const Cpu = struct {
 
     pub fn reset(self: *S, n: *Nes) void {
         self.p.i = 1;
-        self.pc = n.busReadWide(0xfffc);
+        self.pc = n.readBusWide(0xfffc);
         self.s -%= 3;
     }
 
@@ -139,7 +139,8 @@ const Cpu = struct {
     }
 };
 
-fn busRead(self: *Self, addr: u16) u8 {
+/// Read directly, don't do anything else (debug/internal)
+fn readImpl(self: *Self, addr: u16) u8 {
     switch (addr) {
         0...0x1fff => {
             // Read from CPU memory
@@ -167,18 +168,25 @@ fn busRead(self: *Self, addr: u16) u8 {
     unreachable;
 }
 
-/// Doesn't deal with page wrapping
-fn busReadWide(self: *Self, addr: u16) u16 {
-    if (addr == 0xffff) {
-        @panic("wide read out of bounds");
-    }
-    const lower = self.busRead(addr);
-    // TODO: is it fine for this to ever overflow?
-    const upper = self.busRead(addr +% 1);
+fn readImplWide(self: *Self, addr: u16) u16 {
+    const lower = self.readImpl(addr);
+    const upper = self.readImpl(addr +% 1);
     return lower | @as(u16, upper) << 8;
 }
 
-fn busWrite(self: *Self, addr: u16, val: u8) void {
+/// Emulate reading from the bus
+fn readBus(self: *Self, addr: u16) u8 {
+    return self.readImpl(addr);
+}
+
+/// Doesn't deal with page wrapping
+fn readBusWide(self: *Self, addr: u16) u16 {
+    const lower = self.readBus(addr);
+    const upper = self.readBus(addr +% 1);
+    return lower | @as(u16, upper) << 8;
+}
+
+fn writeBus(self: *Self, addr: u16, val: u8) void {
     switch (addr) {
         0...0x1fff => {
             // Read from CPU memory
@@ -208,7 +216,7 @@ fn busWrite(self: *Self, addr: u16, val: u8) void {
 /// Initializes an NES from iNES data.
 pub fn fromRom(reader: std.io.AnyReader) !Self {
     // TODO: implement NES2.0
-    const ROMHeader = packed struct {
+    const ROMHeader = packed struct(u128) {
         // NOTE: https://github.com/ziglang/zig/issues/12547
         // this means not even byte arrays are allowed
         // TODO: write a better readStruct
@@ -235,10 +243,6 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
         /// TODO
         _flags10: u8,
         _pad: u40,
-
-        comptime {
-            std.debug.assert(@sizeOf(@This()) == 16);
-        }
     };
 
     const header = try reader.readStruct(ROMHeader);
@@ -267,10 +271,110 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
     log.info("initialized an NES", .{});
     ret.cpu.log_state();
+
+    for (0..9) |_| {
+        ret.cpuFetchDecode();
+    }
     return ret;
 }
 
 pub fn deinit(self: *Self) void {
     util.alloc.destroy(self.cpu_ram);
     self.m.deinit();
+}
+
+pub fn update(self: *Self) void {
+    self.cpuExec();
+}
+
+fn fetchPc(self: *Self) u8 {
+    const ret = self.readBus(self.cpu.pc);
+    self.cpu.pc +%= 1;
+    return ret;
+}
+
+fn fetchPcWide(self: *Self) u16 {
+    const ret = self.readBusWide(self.cpu.pc);
+    self.cpu.pc +%= 2;
+    return ret;
+}
+
+fn resolveTargetAddr(
+    self: *Self,
+    op: instr.Op,
+    mode: instr.Mode,
+) u16 {
+    const c = self.cpu;
+    const force_page_cross = op == .sta or op == .stx or op == .sty;
+    switch (mode) {
+        .implicit, .imm, .rel => {
+            @panic("specified mode doesn't have an operand address");
+        },
+        .page0 => {
+            const off = self.fetchPc();
+            return @as(u16, off);
+        },
+        .abs => {
+            const addr = self.fetchPcWide();
+            return addr;
+        },
+        .ind => {
+            const iaddr = self.fetchPcWide();
+            return self.readBusWide(iaddr);
+        },
+        .page0_x, .page0_y => {
+            const reg_val = if (mode == .abs_x) c.x else c.y;
+            return @as(u16, self.fetchPc() +% reg_val);
+        },
+        .abs_x, .abs_y => {
+            const reg_val = if (mode == .abs_x) c.x else c.y;
+            var addr = self.fetchPcWide();
+
+            // if page crossing occurs, the CPU performs a dummy read (?)
+            // TODO: also waste a cycle when cycle counting is implemented
+            // TODO: figure out if my reading of this behavior is correct
+            const res = @addWithOverflow(
+                @as(u8, @intCast(addr & 0xff)),
+                reg_val,
+            );
+            addr = addr & 0xff00 | res[0];
+            // store instructions always do this read, use a parameter (?)
+            if (res[1] == 1 or force_page_cross) _ = self.readBus(addr);
+            return addr +% (@as(u16, res[1]) << 8);
+        },
+        .idx_ind => {
+            const off = self.fetchPc();
+            const base = off +% c.x;
+            const lo = self.readBus(base);
+            const hi = self.readBus(base +% 1);
+            return lo | @as(u16, hi) << 8;
+        },
+        .ind_idx => {
+            const off = self.fetchPc();
+            const lo = self.readBus(off);
+            const hi = self.readBus(off +% 1);
+            var addr = lo | @as(u16, hi) << 8;
+            const res = @addWithOverflow(@as(u8, @intCast(addr & 0xff)), c.y);
+            addr = addr & 0xff00 | res[0];
+            if (res[1] == 1) _ = self.readBus(addr);
+            return addr +% (@as(u16, res[1]) << 8);
+        },
+    }
+}
+
+fn cpuFetchDecode(self: *Self) void {
+    // const c = self.cpu;
+    const opcode = self.fetchPc();
+    const decoded = instr.decode(opcode);
+    const op = decoded[0];
+    const m = decoded[1];
+    const mname = if (m == .implicit) "" else @tagName(m);
+    log.debug("{s} {s}", .{ @tagName(op), mname });
+    if (m != .imm and m != .implicit and m != .rel) {
+        const addr = self.resolveTargetAddr(op, m);
+        log.debug("\taddr: ${x:04}", .{addr});
+    } else if (m != .implicit) {
+        const byte = self.fetchPc();
+        log.debug("\targ: ${x:02}", .{byte});
+    }
 }
