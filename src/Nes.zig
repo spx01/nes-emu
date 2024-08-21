@@ -273,7 +273,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     ret.cpu.log_state();
 
     for (0..9) |_| {
-        ret.cpuFetchDecode();
+        _ = ret.cpuFetchDecode();
     }
     return ret;
 }
@@ -307,8 +307,12 @@ fn resolveTargetAddr(
     const c = self.cpu;
     const force_page_cross = op == .sta or op == .stx or op == .sty;
     switch (mode) {
-        .implicit, .imm, .rel => {
-            @panic("specified mode doesn't have an operand address");
+        .implicit, .imm => {
+            @panic("mode doesn't resolve to an address");
+        },
+        .rel => {
+            const off = @as(i8, @bitCast(self.fetchPc()));
+            return c.pc +% @as(u16, @bitCast(@as(i16, off)));
         },
         .page0 => {
             const off = self.fetchPc();
@@ -362,7 +366,8 @@ fn resolveTargetAddr(
     }
 }
 
-fn cpuFetchDecode(self: *Self) void {
+/// Returns an internal representation of the data the instruction operates on
+fn cpuFetchDecode(self: *Self) u16 {
     // const c = self.cpu;
     const opcode = self.fetchPc();
     const decoded = instr.decode(opcode);
@@ -373,8 +378,12 @@ fn cpuFetchDecode(self: *Self) void {
     if (m != .imm and m != .implicit and m != .rel) {
         const addr = self.resolveTargetAddr(op, m);
         log.debug("\taddr: ${x:04}", .{addr});
+        return addr;
     } else if (m != .implicit) {
         const byte = self.fetchPc();
         log.debug("\targ: ${x:02}", .{byte});
+        return @as(u16, byte);
+    } else {
+        return 0;
     }
 }
