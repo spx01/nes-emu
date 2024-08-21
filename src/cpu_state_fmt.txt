@@ -1,4 +1,3 @@
-
 Registers:
     PC = ${x:04}
     S  =   ${x:02}
