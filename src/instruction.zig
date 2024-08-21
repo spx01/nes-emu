@@ -1,7 +1,10 @@
 const std = @import("std");
+const util = @import("util.zig");
+
 const log = std.log.scoped(.@"nes-instr");
 
-const Operand = union(enum) {
+/// Description of an instruction's operand
+pub const Operand = union(enum) {
     implicit: void,
 
     imm: u8,
@@ -24,18 +27,42 @@ const Operand = union(enum) {
 
     // addr = (*page0(arg) | *page0(arg + 1) << 8) + y
     ind_idx: u8,
-};
 
-pub const Mode = std.meta.Tag(Operand);
+    const Self = @This();
 
-pub fn getOperandSize(m: Mode) usize {
-    const fields = @typeInfo(Mode).Type.Enum.fields;
-    inline for (fields) |field| {
-        if (field.value == @intFromEnum(m)) {
-            return @sizeOf(@field(Operand, field.name));
+    pub fn fromArg(m: Mode, arg: u16) Self {
+        switch (m) {
+            .implicit => return .implicit,
+            inline else => |tag| {
+                return @unionInit(Self, @tagName(tag), @intCast(arg));
+            },
         }
     }
-    unreachable;
+
+    pub fn toArg(self: Self) u16 {
+        switch (self) {
+            // TODO: figure out what to do here, maybe panic
+            .implicit => return 0,
+            inline else => |val| return @as(u16, @intCast(val)),
+        }
+    }
+
+    pub fn size(self: Self) u8 {
+        return getOperandSize(self);
+    }
+};
+
+/// Addressing mode
+pub const Mode = std.meta.Tag(Operand);
+
+pub fn getOperandSize(m: Mode) u8 {
+    switch (m) {
+        .implicit => return 0,
+        inline else => |tag| {
+            const dummy: Operand = undefined;
+            return @intCast(@sizeOf(@TypeOf(@field(dummy, @tagName(tag)))));
+        },
+    }
 }
 
 pub const Op = enum {
@@ -381,6 +408,8 @@ const op_table = [256]Decoded{
     .{ .isc, .abs_x },
 };
 
+var op_encode_table: ?std.AutoHashMap(Decoded, u8) = null;
+
 comptime {
     // ensure sanity
     const correct_pairs = [_]struct { u8, Decoded }{
@@ -395,4 +424,34 @@ comptime {
 
 pub fn decode(opcode: u8) Decoded {
     return op_table[opcode];
+}
+
+pub fn encode(op: Op, operand: Operand, out: []u8) ?u8 {
+    std.debug.assert(out.len >= 1);
+    if (op_encode_table == null) {
+        op_encode_table = std.AutoHashMap(Decoded, u8).init(util.alloc);
+        for (op_table, 0..) |o, i| {
+            op_encode_table.?.put(o, @intCast(i)) catch unreachable;
+        }
+    }
+    const maybe_opcode = op_encode_table.?.get(.{ op, operand });
+    if (maybe_opcode == null) return null;
+    const opcode = maybe_opcode.?;
+    out[0] = opcode;
+    const size = operand.size();
+    const arg = operand.toArg();
+    switch (size) {
+        0 => {},
+        1 => {
+            std.debug.assert(out.len >= 2);
+            out[1] = @intCast(arg);
+        },
+        2 => {
+            std.debug.assert(out.len >= 3);
+            out[1] = @intCast(arg & 0xff);
+            out[2] = @intCast(arg >> 8);
+        },
+        else => unreachable,
+    }
+    return size;
 }

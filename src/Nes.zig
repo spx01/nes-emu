@@ -278,6 +278,12 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     return ret;
 }
 
+/// Initialize code straight into CPU RAM and prepare execution at $0
+pub fn fromCpuInstructions(comptime data: []const u8) void {
+    // TODO:
+    _ = data;
+}
+
 pub fn deinit(self: *Self) void {
     util.alloc.destroy(self.cpu_ram);
     self.m.deinit();
@@ -374,7 +380,15 @@ fn cpuFetchDecode(self: *Self) u16 {
     const op = decoded[0];
     const m = decoded[1];
     const mname = if (m == .implicit) "" else @tagName(m);
-    log.debug("{s} {s}", .{ @tagName(op), mname });
+    var buf = [_]u8{0} ** 3;
+    _ = instr.encode(op, instr.Operand.fromArg(m, 0x10), &buf);
+    log.debug("{s} {s} ({x:02} {x:02} {x:02})", .{
+        @tagName(op),
+        mname,
+        buf[0],
+        buf[1],
+        buf[2],
+    });
     if (m != .imm and m != .implicit and m != .rel) {
         const addr = self.resolveTargetAddr(op, m);
         log.debug("\taddr: ${x:04}", .{addr});
