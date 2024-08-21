@@ -1,19 +1,20 @@
 const std = @import("std");
 
-context: *anyopaque,
+context: *allowzero anyopaque,
 id: Type,
 vt: *const VTable,
 
 const Self = @This();
 
 pub const VTable = struct {
-    read: *const fn (context: *anyopaque, addr: u16) u8,
-    write: *const fn (context: *anyopaque, addr: u16, val: u8) void,
+    read: *const fn (context: *allowzero anyopaque, addr: u16) u8,
+    write: *const fn (context: *allowzero anyopaque, addr: u16, val: u8) void,
     deinit: ?*const fn (context: *anyopaque) void,
 };
 
 pub const Type = enum(u8) {
-    NROM = 0,
+    nrom = 0,
+    dummy,
 };
 
 pub fn read(self: *Self, addr: u16) u8 {

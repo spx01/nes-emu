@@ -453,5 +453,20 @@ pub fn encode(op: Op, operand: Operand, out: []u8) ?u8 {
         },
         else => unreachable,
     }
-    return size;
+    return size + 1;
+}
+
+var mem_buf: [0x800]u8 = undefined;
+
+/// The same internal buffer is used for each call, used for testing purposes
+pub fn encodeStreamDebug(stream: []const struct { Op, Operand }) []const u8 {
+    var loc: usize = 0;
+    for (stream) |i| {
+        loc += @as(usize, encode(
+            i[0],
+            i[1],
+            mem_buf[loc..],
+        ) orelse unreachable);
+    }
+    return mem_buf[0..loc];
 }

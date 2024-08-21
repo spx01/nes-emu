@@ -58,11 +58,30 @@ const Mapper0 = struct {
     pub fn any(self: *S) AnyMapper {
         return .{
             .context = self,
-            .id = .NROM,
+            .id = .nrom,
             .vt = &.{
                 .read = @ptrCast(&S.read),
                 .write = @ptrCast(&S.write),
                 .deinit = @ptrCast(&S.destroy),
+            },
+        };
+    }
+};
+
+const DummyMapper = struct {
+    const S = @This();
+    pub fn read(_: *allowzero S, _: u16) u8 {
+        return 0;
+    }
+    pub fn write(_: *allowzero S, _: u16, _: u8) void {}
+    pub fn any() AnyMapper {
+        return .{
+            .context = @ptrFromInt(0),
+            .id = .dummy,
+            .vt = &.{
+                .read = @ptrCast(&S.read),
+                .write = @ptrCast(&S.write),
+                .deinit = null,
             },
         };
     }
@@ -120,7 +139,7 @@ const Cpu = struct {
         self.s -%= 3;
     }
 
-    pub fn log_state(self: *S) void {
+    pub fn logState(self: *S) void {
         // multiline string literals broken or PEBKAC
         cpu_log.debug(@embedFile("./cpu_state_fmt.txt"), .{
             self.pc,
@@ -259,7 +278,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
     std.debug.assert(mapper_val == 0); // only Mapper0 supported
 
-    var ret: @This() = undefined;
+    var ret: Self = undefined;
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
     errdefer util.alloc.destroy(ret.cpu_ram);
 
@@ -270,18 +289,24 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     ret.cpu.reset(&ret);
 
     log.info("initialized an NES", .{});
-    ret.cpu.log_state();
 
-    for (0..9) |_| {
-        _ = ret.cpuFetchDecode();
-    }
     return ret;
 }
 
 /// Initialize code straight into CPU RAM and prepare execution at $0
-pub fn fromCpuInstructions(comptime data: []const u8) void {
-    // TODO:
-    _ = data;
+pub fn fromCpuInstructions(data: []const u8) !Self {
+    var ret: Self = undefined;
+
+    ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
+    errdefer util.alloc.destroy(ret.cpu_ram);
+
+    std.debug.assert(data.len <= ret.cpu_ram.len);
+    @memcpy(@as([*]u8, ret.cpu_ram), data);
+
+    ret.m = DummyMapper.any();
+    ret.cpu = Cpu.init();
+    ret.cpu.reset(&ret);
+    return ret;
 }
 
 pub fn deinit(self: *Self) void {
@@ -399,5 +424,12 @@ fn cpuFetchDecode(self: *Self) u16 {
         return @as(u16, byte);
     } else {
         return 0;
+    }
+}
+
+pub fn debugStuff(self: *Self) void {
+    self.cpu.logState();
+    for (0..10) |_| {
+        _ = self.cpuFetchDecode();
     }
 }
