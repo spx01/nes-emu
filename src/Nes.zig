@@ -12,9 +12,6 @@ const AnyMapper = @import("Mapper.zig");
 
 const page_size = 0x4000;
 
-const log = std.log.scoped(.@"nes-core");
-const cpu_log = std.log.scoped(.@"nes-cpu");
-
 /// NROM
 const Mapper0 = struct {
     // Only one page for now
@@ -141,7 +138,7 @@ const Cpu = struct {
 
     pub fn logState(self: *S) void {
         // multiline string literals broken or PEBKAC
-        cpu_log.debug(@embedFile("./cpu_state_fmt.txt"), .{
+        std.debug.print(@embedFile("./cpu_state_fmt.txt"), .{
             self.pc,
             self.s,
             self.a,
@@ -287,8 +284,6 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
     ret.cpu = Cpu.init();
     ret.cpu.reset(&ret);
-
-    log.info("initialized an NES", .{});
 
     return ret;
 }

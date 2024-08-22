@@ -1,8 +1,6 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-const log = std.log.scoped(.@"nes-instr");
-
 /// Description of an instruction's operand
 pub const Operand = union(enum) {
     implicit: void,
