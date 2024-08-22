@@ -50,6 +50,55 @@ pub const Operand = union(enum) {
     pub fn size(self: Self) u8 {
         return getOperandSize(self);
     }
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const fmt = std.fmt.format;
+        switch (self) {
+            .implicit => return {},
+            .imm => |x| {
+                return fmt(writer, "#${x:02}", .{x});
+            },
+            .rel => |x| {
+                const signed = @as(i8, @bitCast(x));
+                return fmt(writer, "*{c}${x:02}", .{
+                    if (signed < 0) @as(u8, '-') else @as(u8, '+'),
+                    @as(u8, @intCast(@abs(signed))),
+                });
+            },
+            .page0 => |x| {
+                return fmt(writer, "${x:02}", .{x});
+            },
+            .page0_x => |x| {
+                return fmt(writer, "${x:02},x", .{x});
+            },
+            .page0_y => |x| {
+                return fmt(writer, "${x:02},y", .{x});
+            },
+            .abs => |x| {
+                return fmt(writer, "${x:04}", .{x});
+            },
+            .abs_x => |x| {
+                return fmt(writer, "${x:04},x", .{x});
+            },
+            .abs_y => |x| {
+                return fmt(writer, "${x:04},y", .{x});
+            },
+            .ind => |x| {
+                return fmt(writer, "(${x:04})", .{x});
+            },
+            .idx_ind => |x| {
+                return fmt(writer, "(${x:02},x)", .{x});
+            },
+            .ind_idx => |x| {
+                return fmt(writer, "(${x:02}),y", .{x});
+            },
+        }
+    }
 };
 
 /// Addressing mode
@@ -71,7 +120,6 @@ pub const Op = enum {
     aldy,
     alr,
     anc,
-    // I will not settle for less
     @"and",
     arr,
     asl,

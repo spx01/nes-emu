@@ -342,6 +342,7 @@ fn resolveTargetAddr(
             @panic("mode doesn't resolve to an address");
         },
         .rel => {
+            // TODO: cycle counting for page crossing
             const off = @as(i8, @bitCast(self.fetchPc()));
             return c.pc +% @as(u16, @bitCast(@as(i16, off)));
         },
@@ -397,34 +398,31 @@ fn resolveTargetAddr(
     }
 }
 
+/// Fetch unified representation of instruction argument
+fn fetchArg(self: *Self, mode: instr.Mode) u16 {
+    const size = instr.getOperandSize(mode);
+    return switch (size) {
+        0 => 0,
+        1 => self.fetchPc(),
+        2 => self.fetchPcWide(),
+        else => unreachable,
+    };
+}
+
 /// Returns an internal representation of the data the instruction operates on
 fn cpuFetchDecode(self: *Self) u16 {
-    // const c = self.cpu;
+    const start_pc = self.cpu.pc;
     const opcode = self.fetchPc();
     const decoded = instr.decode(opcode);
     const op = decoded[0];
     const m = decoded[1];
-    const mname = if (m == .implicit) "" else @tagName(m);
-    var buf = [_]u8{0} ** 3;
-    _ = instr.encode(op, instr.Operand.fromArg(m, 0x10), &buf);
-    log.debug("{s} {s} ({x:02} {x:02} {x:02})", .{
+    const operand = instr.Operand.fromArg(m, self.fetchArg(m));
+    std.debug.print("{x:05}: {s} {}\n", .{
+        start_pc,
         @tagName(op),
-        mname,
-        buf[0],
-        buf[1],
-        buf[2],
+        operand,
     });
-    if (m != .imm and m != .implicit and m != .rel) {
-        const addr = self.resolveTargetAddr(op, m);
-        log.debug("\taddr: ${x:04}", .{addr});
-        return addr;
-    } else if (m != .implicit) {
-        const byte = self.fetchPc();
-        log.debug("\targ: ${x:02}", .{byte});
-        return @as(u16, byte);
-    } else {
-        return 0;
-    }
+    return 0;
 }
 
 pub fn debugStuff(self: *Self) void {

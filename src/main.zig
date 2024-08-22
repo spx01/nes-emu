@@ -13,11 +13,12 @@ pub fn main() !void {
         .{ .ldx, .{ .imm = 0x40 } },
         .{ .jmp, .{ .ind = 0xfffc } },
         .{ .beq, .{ .rel = @bitCast(@as(i8, -2)) } },
+        .{ .cmp, .{ .ind_idx = 0xfc } },
     };
     const assembled = instr.encodeStreamDebug(&test_data);
     std.debug.dumpHex(assembled);
 
-    // var machine = try Nes.fromRom(rom_file.reader().any());
+    //var machine = try Nes.fromRom(rom_file.reader().any());
     var machine = try Nes.fromCpuInstructions(assembled);
     defer machine.deinit();
 
