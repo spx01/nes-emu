@@ -8,9 +8,8 @@ pub fn main() !void {
     defer rom_file.close();
 
     const test_data = [_]struct { instr.Op, instr.Operand }{
-        .{ .jmp, .{ .abs = 0x0004 } },
-        .{ .brk, .implicit },
-        .{ .jmp, .{ .abs = 0x0000 } },
+        .{ .adc, .{ .imm = 0x40 } },
+        .{ .adc, .{ .imm = 0x40 } },
     };
     const assembled = instr.encodeStreamDebug(&test_data);
     std.debug.dumpHex(assembled);

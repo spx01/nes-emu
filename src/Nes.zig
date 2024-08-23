@@ -109,8 +109,14 @@ const Cpu = struct {
         /// Negative
         n: u1 = 0,
 
-        pub fn val(self: Flags) u8 {
+        pub fn value(self: Flags) u8 {
             return @as(u8, @bitCast(self));
+        }
+
+        /// Updates Z and N flags for a given value
+        pub fn updateZn(self: *Flags, val: u8) void {
+            self.z = @intFromBool(val == 0);
+            self.n = @intCast(val >> 7);
         }
     };
 
@@ -144,7 +150,7 @@ const Cpu = struct {
             self.a,
             self.x,
             self.y,
-            self.p.val(),
+            self.p.value(),
             if (self.p.c == 1) "[C]" else " c ",
             if (self.p.z == 1) "[Z]" else " z ",
             if (self.p.i == 1) "[I]" else " i ",
@@ -174,7 +180,7 @@ fn popStack(self: *Self) u8 {
 fn popStackWide(self: *Self) u16 {
     const lo = self.popStack();
     const hi = self.popStack();
-    return lo | hi << 8;
+    return lo | @as(u16, hi) << 8;
 }
 
 /// Read directly, don't do anything else (debug/internal)
@@ -493,16 +499,15 @@ fn exec(self: *Self) void {
             const result = @as(u32, c.a) + val + c.p.c;
             c.a = @intCast(result & 0xff);
             c.p.c = @intCast(result >> 8);
-            c.p.z = @intFromBool(c.a == 0);
-            c.p.v = @as(u1, @intCast((c.a >> 7) ^ (old >> 7))) & c.p.c;
-            c.p.n = @intCast(c.a >> 7);
+            const same_sign = @intFromBool(val >> 7 == old >> 7);
+            c.p.v = @as(u1, @intCast((c.a >> 7) ^ (old >> 7))) & same_sign;
+            c.p.updateZn(c.a);
         },
         .@"and" => {
             // and
             const val = self.readBus(d.addr.?);
             c.a &= val;
-            c.p.z = @intFromBool(c.a == 0);
-            c.p.n = @intCast(c.a >> 7);
+            c.p.updateZn(c.a);
         },
         .asl => {
             // shift left
@@ -510,9 +515,10 @@ fn exec(self: *Self) void {
             const val = if (acc) c.a else self.readBus(d.addr.?);
             const res = val << 1;
             c.p.c = @intCast(val >> 7);
-            // zero is set if A is 0
-            c.p.z = @intFromBool(c.a == 0);
-            c.p.n = @intCast(res >> 7);
+            // TODO: figure out if
+            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
+            // is incorrect (zero if A = 0)
+            c.p.updateZn(res);
             if (acc) {
                 c.a = res;
             } else {
@@ -535,7 +541,7 @@ fn exec(self: *Self) void {
             // bit test
             const val = self.readBus(d.addr.?);
             const res = val & c.a;
-            c.p.n = @intCast(res >> 7);
+            c.p.updateZn(res);
             c.p.v = @intCast(res >> 6 & 1);
         },
         .bmi => {
@@ -554,7 +560,7 @@ fn exec(self: *Self) void {
             self.pushStackWide(c.pc);
             c.p.i = 1;
             c.p.b = 1;
-            self.pushStack(c.p.val());
+            self.pushStack(c.p.value());
             c.p.b = 0;
             c.pc = self.readBusWide(0xfffe);
         },
@@ -601,53 +607,154 @@ fn exec(self: *Self) void {
             // decrement memory
             const val = self.readBus(d.addr.?);
             const res = val -% 1;
-            c.p.z = @intFromBool(res == 0);
-            c.p.n = @intCast(res >> 7);
+            c.p.updateZn(res);
             self.writeBus(d.addr.?, res);
         },
         .dex => {
             // decrement X
             c.x -%= 1;
-            c.p.z = @intFromBool(c.x == 0);
-            c.p.n = @intCast(c.x >> 7);
+            c.p.updateZn(c.x);
         },
         .dey => {
             // decrement Y
             c.y -%= 1;
-            c.p.z = @intFromBool(c.y == 0);
-            c.p.n = @intCast(c.y >> 7);
+            c.p.updateZn(c.y);
         },
         .eor => {
             // xor
             const val = self.readBus(d.addr.?);
             c.a ^= val;
-            c.p.z = @intFromBool(c.a == 0);
-            c.p.n = @intCast(c.a >> 7);
+            c.p.updateZn(c.a);
         },
         .inc => {
             // increment memory
             const val = self.readBus(d.addr.?);
             const res = val +% 1;
-            c.p.z = @intFromBool(res == 0);
-            c.p.n = @intCast(res >> 7);
+            c.p.updateZn(res);
             self.writeBus(d.addr.?, res);
         },
         .inx => {
             // increment X
             c.x +%= 1;
-            c.p.z = @intFromBool(c.x == 0);
-            c.p.n = @intCast(c.x >> 7);
+            c.p.updateZn(c.x);
         },
         .iny => {
             // increment Y
             c.y +%= 1;
-            c.p.z = @intFromBool(c.y == 0);
-            c.p.n = @intCast(c.y >> 7);
+            c.p.updateZn(c.y);
         },
         .jmp => {
             // jump
             c.pc = d.addr.?;
         },
+        .jsr => {
+            // jump to subroutine
+            self.pushStackWide(c.pc -% 1);
+            c.pc = d.addr.?;
+        },
+        .lda => {
+            // load A
+            const val = self.readBus(d.addr.?);
+            c.a = val;
+            c.p.updateZn(c.a);
+        },
+        .ldx => {
+            // load X
+            const val = self.readBus(d.addr.?);
+            c.x = val;
+            c.p.updateZn(c.x);
+        },
+        .ldy => {
+            // load Y
+            const val = self.readBus(d.addr.?);
+            c.y = val;
+            c.p.updateZn(c.y);
+        },
+        .lsr => {
+            // shift right
+            const acc = d.addr == null;
+            const val = if (acc) c.a else self.readBus(d.addr.?);
+            const res = val >> 1;
+            c.p.c = @intCast(val & 1);
+            // TODO: figure out if
+            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
+            // is incorrect (zero if A = 0)
+            c.p.updateZn(res);
+            if (acc) {
+                c.a = res;
+            } else {
+                self.writeBus(d.addr.?, res);
+            }
+        },
+        .nop => {
+            // no operation
+        },
+        .ora => {
+            // inclusive or
+            const val = self.readBus(d.addr.?);
+            c.a |= val;
+            c.p.updateZn(c.a);
+        },
+        .pha => {
+            // push A
+            self.pushStack(c.a);
+        },
+        .php => {
+            // push P
+            self.pushStack(c.p.value());
+        },
+        .pla => {
+            // pop A
+            c.a = self.popStack();
+            c.p.updateZn(c.a);
+        },
+        .plp => {
+            // pop P
+            c.p = @bitCast(self.popStack());
+        },
+        .rol => {
+            // rotate left
+            const acc = d.addr == null;
+            const val = if (acc) c.a else self.readBus(d.addr.?);
+            const res = std.math.rotl(u8, val, 1);
+            c.p.c = @intCast(res & 1);
+            // TODO: figure out if
+            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
+            // is incorrect (zero if A = 0)
+            c.p.updateZn(res);
+            if (acc) {
+                c.a = res;
+            } else {
+                self.writeBus(d.addr.?, res);
+            }
+        },
+        .ror => {
+            // rotate right
+            const acc = d.addr == null;
+            const val = if (acc) c.a else self.readBus(d.addr.?);
+            const res = std.math.rotr(u8, val, 1);
+            c.p.c = @intCast(val & 1);
+            // TODO: figure out if
+            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
+            // is incorrect (zero if A = 0)
+            c.p.updateZn(res);
+            if (acc) {
+                c.a = res;
+            } else {
+                self.writeBus(d.addr.?, res);
+            }
+        },
+        .rti => {
+            // return from interrupt
+            c.p = @bitCast(self.popStack());
+            // always keep B on 0
+            c.p.b = 0;
+            c.pc = self.popStackWide();
+        },
+        .rts => {
+            c.pc = self.popStackWide() +% 1;
+        },
+        .sbc => {},
         else => {
             std.debug.print("exec: unimplemented\n", .{});
         },
