@@ -207,7 +207,7 @@ fn writeBus(self: *Self, addr: u16, val: u8) void {
         0...0x1fff => {
             // Read from CPU memory
             const masked = addr & 0x7ff;
-            self.cpu_mem[masked] = val;
+            self.cpu_ram[masked] = val;
         },
         0x2000...0x3fff => {
             // PPU registers
@@ -325,16 +325,25 @@ fn fetchPcWide(self: *Self) u16 {
     return ret;
 }
 
-fn resolveTargetAddr(
+fn fetchTargetAddr(
     self: *Self,
     op: instr.Op,
     mode: instr.Mode,
-) u16 {
-    const c = self.cpu;
+) ?u16 {
+    const c = &self.cpu;
     const force_page_cross = op == .sta or op == .stx or op == .sty;
     switch (mode) {
-        .implicit, .imm => {
-            @panic("mode doesn't resolve to an address");
+        .implicit => {
+            return null;
+        },
+        .imm => {
+            // the idea is to not do a bus read here, just return the address
+            // and increment the PC as if nothing happened, considering a read
+            // at the address is going to be done during execution anyways
+            // TODO: is this a good approach?
+            const addr = c.pc;
+            c.pc +%= 1;
+            return addr;
         },
         .rel => {
             // TODO: cycle counting for page crossing
@@ -393,36 +402,107 @@ fn resolveTargetAddr(
     }
 }
 
-/// Fetch unified representation of instruction argument
-fn fetchArg(self: *Self, mode: instr.Mode) u16 {
+/// Fetch representation of instruction argument without advancing PC
+fn prefetchArg(self: *Self, mode: instr.Mode) u16 {
     const size = instr.getOperandSize(mode);
     return switch (size) {
         0 => 0,
-        1 => self.fetchPc(),
-        2 => self.fetchPcWide(),
+        1 => self.readImpl(self.cpu.pc),
+        2 => self.readImplWide(self.cpu.pc),
         else => unreachable,
     };
 }
 
+const FullDecoded = struct {
+    op: instr.Op,
+    operand: instr.Operand,
+    arg: u16,
+    addr: ?u16,
+};
+
 /// Returns an internal representation of the data the instruction operates on
-fn cpuFetchDecode(self: *Self) u16 {
+fn cpuFetchDecode(self: *Self) FullDecoded {
     const start_pc = self.cpu.pc;
     const opcode = self.fetchPc();
     const decoded = instr.decode(opcode);
     const op = decoded[0];
     const m = decoded[1];
-    const operand = instr.Operand.fromArg(m, self.fetchArg(m));
+    const arg = self.prefetchArg(m);
+    const operand = instr.Operand.fromArg(m, arg);
+    const addr = self.fetchTargetAddr(op, operand);
+
     std.debug.print("{x:05}: {s} {}\n", .{
         start_pc,
         @tagName(op),
         operand,
     });
-    return 0;
+    return .{
+        .op = op,
+        .operand = operand,
+        .arg = arg,
+        .addr = addr,
+    };
+}
+
+fn exec(self: *Self) void {
+    const d = self.cpuFetchDecode();
+    const c = &self.cpu;
+    switch (d.op) {
+        .adc => {
+            // add with carry
+            const val = self.readBus(d.addr.?);
+            const old = c.a;
+            const result = @as(u32, c.a) + val + c.p.c;
+            c.a = @intCast(result & 0xff);
+            c.p.c = @intCast(result >> 8);
+            c.p.z = @intFromBool(c.a == 0);
+            c.p.v = @as(u1, @intCast((c.a >> 7) ^ (old >> 7))) & c.p.c;
+            c.p.n = @intCast(c.a >> 7);
+        },
+        .@"and" => {
+            // and
+            const val = self.readBus(d.addr.?);
+            c.a &= val;
+            c.p.z = @intFromBool(c.a == 0);
+            c.p.n = @intCast(c.a >> 7);
+        },
+        .asl => {
+            // shift left
+            const acc = d.addr == null;
+            const val = if (acc) c.a else self.readBus(d.addr.?);
+            const res = val << 1;
+            c.p.c = @intCast(val >> 7);
+            c.p.z = @intFromBool(c.a == 0);
+            c.p.n = @intCast(res >> 7);
+            if (acc) {
+                c.a = res;
+            } else {
+                self.writeBus(d.addr.?, res);
+            }
+        },
+        .bcc => {
+            // branch if not carry
+            if (c.p.c == 0) c.pc = d.addr.?;
+        },
+        .bcs => {
+            // branch if carry
+            if (c.p.c == 1) c.pc = d.addr.?;
+        },
+        .beq => {
+            // branch if equal
+            if (c.p.z == 1) c.pc = d.addr.?;
+        },
+        else => {
+            std.debug.print("exec: unimplemented\n", .{});
+        },
+    }
 }
 
 pub fn debugStuff(self: *Self) void {
     self.cpu.logState();
-    for (0..10) |_| {
-        _ = self.cpuFetchDecode();
+    for (0..5) |_| {
+        self.exec();
+        std.debug.dumpHex(self.cpu_ram[0..10]);
+        self.cpu.logState();
     }
 }

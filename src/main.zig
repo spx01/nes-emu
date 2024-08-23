@@ -8,12 +8,8 @@ pub fn main() !void {
     defer rom_file.close();
 
     const test_data = [_]struct { instr.Op, instr.Operand }{
-        .{ .sei, .implicit },
-        .{ .cld, .implicit },
-        .{ .ldx, .{ .imm = 0x40 } },
-        .{ .jmp, .{ .ind = 0xfffc } },
-        .{ .beq, .{ .rel = @bitCast(@as(i8, -2)) } },
-        .{ .cmp, .{ .ind_idx = 0xfc } },
+        .{ .adc, .{ .imm = 0x03 } },
+        .{ .asl, .{ .page0 = 0x00 } },
     };
     const assembled = instr.encodeStreamDebug(&test_data);
     std.debug.dumpHex(assembled);
