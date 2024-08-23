@@ -5,4 +5,4 @@ Registers:
     X  =   ${x:02}
     Y  =   ${x:02}
     P  =   ${x:02} ({5b:08})
-Flags: {s}{s}{s}{s}  {s}{s}
+Flags: {s}{s}{s}{s} _  _  {s}{s}

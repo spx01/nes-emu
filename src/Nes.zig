@@ -145,12 +145,12 @@ const Cpu = struct {
             self.x,
             self.y,
             self.p.val(),
-            if (self.p.c == 1) "C" else "_",
-            if (self.p.z == 1) "Z" else "_",
-            if (self.p.i == 1) "I" else "_",
-            if (self.p.d == 1) "D" else "_",
-            if (self.p.v == 1) "V" else "_",
-            if (self.p.n == 1) "N" else "_",
+            if (self.p.c == 1) "[C]" else " c ",
+            if (self.p.z == 1) "[Z]" else " z ",
+            if (self.p.i == 1) "[I]" else " i ",
+            if (self.p.d == 1) "[D]" else " d ",
+            if (self.p.v == 1) "[V]" else " v ",
+            if (self.p.n == 1) "[N]" else " n ",
         });
     }
 };
@@ -382,6 +382,13 @@ fn fetchTargetAddr(
         },
         .ind => {
             const iaddr = self.fetchPcWide();
+            if (iaddr & 0xff == 0xff) {
+                // the NES doesn't handle page crossing properly for indirect
+                // addressing
+                const lo = self.readBus(iaddr);
+                const hi = self.readBus(iaddr & 0xff00);
+                return lo | @as(u16, hi) << 8;
+            }
             return self.readBusWide(iaddr);
         },
         .page0_x, .page0_y => {
@@ -441,6 +448,15 @@ const FullDecoded = struct {
     arg: u16,
     addr: ?u16,
 };
+
+/// Perform subtraction and set flags accordingly
+fn subImpl(c: *Cpu, a: u8, b: u8) u8 {
+    const res = @subWithOverflow(a, b);
+    c.p.c = res[1];
+    c.p.z = @intFromBool(res[0] == 0);
+    c.p.n = @intCast(res[0] >> 7);
+    return res[0];
+}
 
 /// Returns an internal representation of the data the instruction operates on
 fn cpuFetchDecode(self: *Self) FullDecoded {
@@ -542,6 +558,96 @@ fn exec(self: *Self) void {
             c.p.b = 0;
             c.pc = self.readBusWide(0xfffe);
         },
+        .bvc => {
+            // branch if not overflow
+            if (c.p.v == 0) c.pc = d.addr.?;
+        },
+        .bvs => {
+            // branch if overflow
+            if (c.p.v == 1) c.pc = d.addr.?;
+        },
+        .clc => {
+            // clear carry
+            c.p.c = 0;
+        },
+        .cld => {
+            // clear decimal
+            c.p.d = 0;
+        },
+        .cli => {
+            // clear interrupt disable
+            c.p.i = 0;
+        },
+        .clv => {
+            // clear overflow
+            c.p.v = 0;
+        },
+        .cmp => {
+            // compare
+            const val = self.readBus(d.addr.?);
+            _ = subImpl(c, c.a, val);
+        },
+        .cpx => {
+            // compare X
+            const val = self.readBus(d.addr.?);
+            _ = subImpl(c, c.x, val);
+        },
+        .cpy => {
+            // compare Y
+            const val = self.readBus(d.addr.?);
+            _ = subImpl(c, c.y, val);
+        },
+        .dec => {
+            // decrement memory
+            const val = self.readBus(d.addr.?);
+            const res = val -% 1;
+            c.p.z = @intFromBool(res == 0);
+            c.p.n = @intCast(res >> 7);
+            self.writeBus(d.addr.?, res);
+        },
+        .dex => {
+            // decrement X
+            c.x -%= 1;
+            c.p.z = @intFromBool(c.x == 0);
+            c.p.n = @intCast(c.x >> 7);
+        },
+        .dey => {
+            // decrement Y
+            c.y -%= 1;
+            c.p.z = @intFromBool(c.y == 0);
+            c.p.n = @intCast(c.y >> 7);
+        },
+        .eor => {
+            // xor
+            const val = self.readBus(d.addr.?);
+            c.a ^= val;
+            c.p.z = @intFromBool(c.a == 0);
+            c.p.n = @intCast(c.a >> 7);
+        },
+        .inc => {
+            // increment memory
+            const val = self.readBus(d.addr.?);
+            const res = val +% 1;
+            c.p.z = @intFromBool(res == 0);
+            c.p.n = @intCast(res >> 7);
+            self.writeBus(d.addr.?, res);
+        },
+        .inx => {
+            // increment X
+            c.x +%= 1;
+            c.p.z = @intFromBool(c.x == 0);
+            c.p.n = @intCast(c.x >> 7);
+        },
+        .iny => {
+            // increment Y
+            c.y +%= 1;
+            c.p.z = @intFromBool(c.y == 0);
+            c.p.n = @intCast(c.y >> 7);
+        },
+        .jmp => {
+            // jump
+            c.pc = d.addr.?;
+        },
         else => {
             std.debug.print("exec: unimplemented\n", .{});
         },
@@ -553,6 +659,8 @@ pub fn debugStuff(self: *Self) void {
     for (0..5) |_| {
         self.exec();
         std.debug.dumpHex(self.cpu_ram[0..10]);
+        std.debug.print("Stack:\n", .{});
+        std.debug.dumpHex(self.cpu_ram[@as(u16, self.cpu.s) + 0x100 .. 0x200]);
         self.cpu.logState();
     }
 }
