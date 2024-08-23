@@ -8,8 +8,8 @@ pub fn main() !void {
     defer rom_file.close();
 
     const test_data = [_]struct { instr.Op, instr.Operand }{
-        .{ .adc, .{ .imm = 0x03 } },
-        .{ .asl, .{ .page0 = 0x00 } },
+        .{ .adc, .{ .imm = 0x40 } },
+        .{ .brk, .implicit },
     };
     const assembled = instr.encodeStreamDebug(&test_data);
     std.debug.dumpHex(assembled);

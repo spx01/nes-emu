@@ -155,6 +155,28 @@ const Cpu = struct {
     }
 };
 
+fn pushStack(self: *Self, val: u8) void {
+    self.writeBus(0x100 + @as(u16, self.cpu.s), val);
+    self.cpu.s -%= 1;
+}
+
+fn pushStackWide(self: *Self, val: u16) void {
+    self.pushStack(@intCast(val >> 8));
+    self.pushStack(@intCast(val & 0xff));
+}
+
+fn popStack(self: *Self) u8 {
+    const val = self.readBus(0x100 + @as(u16, self.cpu.s));
+    self.cpu.s +%= 1;
+    return val;
+}
+
+fn popStackWide(self: *Self) u16 {
+    const lo = self.popStack();
+    const hi = self.popStack();
+    return lo | hi << 8;
+}
+
 /// Read directly, don't do anything else (debug/internal)
 fn readImpl(self: *Self, addr: u16) u8 {
     switch (addr) {
@@ -472,6 +494,7 @@ fn exec(self: *Self) void {
             const val = if (acc) c.a else self.readBus(d.addr.?);
             const res = val << 1;
             c.p.c = @intCast(val >> 7);
+            // zero is set if A is 0
             c.p.z = @intFromBool(c.a == 0);
             c.p.n = @intCast(res >> 7);
             if (acc) {
@@ -491,6 +514,33 @@ fn exec(self: *Self) void {
         .beq => {
             // branch if equal
             if (c.p.z == 1) c.pc = d.addr.?;
+        },
+        .bit => {
+            // bit test
+            const val = self.readBus(d.addr.?);
+            const res = val & c.a;
+            c.p.n = @intCast(res >> 7);
+            c.p.v = @intCast(res >> 6 & 1);
+        },
+        .bmi => {
+            // branch if negative
+            if (c.p.n == 1) c.pc = d.addr.?;
+        },
+        .bne => {
+            if (c.p.z == 0) c.pc = d.addr.?;
+        },
+        .bpl => {
+            if (c.p.n == 0) c.pc = d.addr.?;
+        },
+        .brk => {
+            // TODO: figure out if there is more beahvior to implement for
+            // interrupts
+            self.pushStackWide(c.pc);
+            c.p.i = 1;
+            c.p.b = 1;
+            self.pushStack(c.p.val());
+            c.p.b = 0;
+            c.pc = self.readBusWide(0xfffe);
         },
         else => {
             std.debug.print("exec: unimplemented\n", .{});
