@@ -397,12 +397,12 @@ fn fetchTargetAddr(
             }
             return self.readBusWide(iaddr);
         },
-        .page0_x, .page0_y => {
-            const reg_val = if (mode == .abs_x) c.x else c.y;
+        inline .page0_x, .page0_y => |m| {
+            const reg_val = if (m == .abs_x) c.x else c.y;
             return @as(u16, self.fetchPc() +% reg_val);
         },
-        .abs_x, .abs_y => {
-            const reg_val = if (mode == .abs_x) c.x else c.y;
+        inline .abs_x, .abs_y => |m| {
+            const reg_val = if (m == .abs_x) c.x else c.y;
             var addr = self.fetchPcWide();
 
             // if page crossing occurs, the CPU performs a dummy read (?)
@@ -492,29 +492,49 @@ fn exec(self: *Self) void {
     const d = self.cpuFetchDecode();
     const c = &self.cpu;
     switch (d.op) {
-        .adc => {
-            // add with carry
-            const val = self.readBus(d.addr.?);
+        inline .adc, .sbc => |op| {
+            // add/subtract with carry
+            const val_orig = self.readBus(d.addr.?);
+            const val = if (op == .adc) val_orig else ~val_orig;
             const old = c.a;
             const result = @as(u32, c.a) + val + c.p.c;
             c.a = @intCast(result & 0xff);
             c.p.c = @intCast(result >> 8);
-            const same_sign = @intFromBool(val >> 7 == old >> 7);
-            c.p.v = @as(u1, @intCast((c.a >> 7) ^ (old >> 7))) & same_sign;
+            c.p.v = @intFromBool((c.a ^ old) & ~(old ^ val) & 0x80 != 0);
             c.p.updateZn(c.a);
         },
-        .@"and" => {
-            // and
+
+        inline .@"and", .ora, .eor, .lda => |op| {
+            // simple A, M, Z, N operations
             const val = self.readBus(d.addr.?);
-            c.a &= val;
+            _ = switch (op) {
+                .@"and" => c.a &= val,
+                .ora => c.a |= val,
+                .eor => c.a ^= val,
+                .lda => c.a = val,
+                else => unreachable,
+            };
             c.p.updateZn(c.a);
         },
-        .asl => {
-            // shift left
+
+        inline .asl, .lsr, .rol, .ror => |op| {
+            // shift/rotate left/right
             const acc = d.addr == null;
             const val = if (acc) c.a else self.readBus(d.addr.?);
-            const res = val << 1;
-            c.p.c = @intCast(val >> 7);
+            const res = switch (op) {
+                .asl => val << 1,
+                .lsr => val >> 1,
+                .rol => std.math.rotl(u8, val, 1),
+                .ror => std.math.rotr(u8, val, 1),
+                else => unreachable,
+            };
+            c.p.c = @intCast(switch (op) {
+                .asl => val >> 7,
+                .lsr => val & 1,
+                .rol => res & 1,
+                .ror => val & 1,
+                else => unreachable,
+            });
             // TODO: figure out if
             // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
             // is incorrect (zero if A = 0)
@@ -525,8 +545,9 @@ fn exec(self: *Self) void {
                 self.writeBus(d.addr.?, res);
             }
         },
+
         .bcc => {
-            // branch if not carry
+            // branch not carry
             if (c.p.c == 0) c.pc = d.addr.?;
         },
         .bcs => {
@@ -537,6 +558,27 @@ fn exec(self: *Self) void {
             // branch if equal
             if (c.p.z == 1) c.pc = d.addr.?;
         },
+        .bmi => {
+            // branch if negative
+            if (c.p.n == 1) c.pc = d.addr.?;
+        },
+        .bne => {
+            // branch not equal
+            if (c.p.z == 0) c.pc = d.addr.?;
+        },
+        .bpl => {
+            // branch not negative
+            if (c.p.n == 0) c.pc = d.addr.?;
+        },
+        .bvc => {
+            // branch if not overflow
+            if (c.p.v == 0) c.pc = d.addr.?;
+        },
+        .bvs => {
+            // branch if overflow
+            if (c.p.v == 1) c.pc = d.addr.?;
+        },
+
         .bit => {
             // bit test
             const val = self.readBus(d.addr.?);
@@ -544,16 +586,7 @@ fn exec(self: *Self) void {
             c.p.updateZn(res);
             c.p.v = @intCast(res >> 6 & 1);
         },
-        .bmi => {
-            // branch if negative
-            if (c.p.n == 1) c.pc = d.addr.?;
-        },
-        .bne => {
-            if (c.p.z == 0) c.pc = d.addr.?;
-        },
-        .bpl => {
-            if (c.p.n == 0) c.pc = d.addr.?;
-        },
+
         .brk => {
             // TODO: figure out if there is more beahvior to implement for
             // interrupts
@@ -564,14 +597,7 @@ fn exec(self: *Self) void {
             c.p.b = 0;
             c.pc = self.readBusWide(0xfffe);
         },
-        .bvc => {
-            // branch if not overflow
-            if (c.p.v == 0) c.pc = d.addr.?;
-        },
-        .bvs => {
-            // branch if overflow
-            if (c.p.v == 1) c.pc = d.addr.?;
-        },
+
         .clc => {
             // clear carry
             c.p.c = 0;
@@ -588,28 +614,39 @@ fn exec(self: *Self) void {
             // clear overflow
             c.p.v = 0;
         },
-        .cmp => {
+        .sec => {
+            // set carry
+            c.p.c = 1;
+        },
+        .sed => {
+            // set decimal
+            c.p.d = 1;
+        },
+        .sei => {
+            // set interrupt disable
+            c.p.i = 1;
+        },
+
+        inline .cmp, .cpx, .cpy => |op| {
             // compare
+            const cmp = switch (op) {
+                .cmp => c.a,
+                .cpx => c.x,
+                .cpy => c.y,
+                else => unreachable,
+            };
             const val = self.readBus(d.addr.?);
-            _ = subImpl(c, c.a, val);
+            _ = subImpl(c, cmp, val);
         },
-        .cpx => {
-            // compare X
+
+        inline .inc, .dec => |op| {
+            // increment/decrement memory
             const val = self.readBus(d.addr.?);
-            _ = subImpl(c, c.x, val);
-        },
-        .cpy => {
-            // compare Y
-            const val = self.readBus(d.addr.?);
-            _ = subImpl(c, c.y, val);
-        },
-        .dec => {
-            // decrement memory
-            const val = self.readBus(d.addr.?);
-            const res = val -% 1;
+            const res = if (op == .dec) val -% 1 else val +% 1;
             c.p.updateZn(res);
             self.writeBus(d.addr.?, res);
         },
+
         .dex => {
             // decrement X
             c.x -%= 1;
@@ -619,19 +656,6 @@ fn exec(self: *Self) void {
             // decrement Y
             c.y -%= 1;
             c.p.updateZn(c.y);
-        },
-        .eor => {
-            // xor
-            const val = self.readBus(d.addr.?);
-            c.a ^= val;
-            c.p.updateZn(c.a);
-        },
-        .inc => {
-            // increment memory
-            const val = self.readBus(d.addr.?);
-            const res = val +% 1;
-            c.p.updateZn(res);
-            self.writeBus(d.addr.?, res);
         },
         .inx => {
             // increment X
@@ -652,12 +676,6 @@ fn exec(self: *Self) void {
             self.pushStackWide(c.pc -% 1);
             c.pc = d.addr.?;
         },
-        .lda => {
-            // load A
-            const val = self.readBus(d.addr.?);
-            c.a = val;
-            c.p.updateZn(c.a);
-        },
         .ldx => {
             // load X
             const val = self.readBus(d.addr.?);
@@ -670,30 +688,8 @@ fn exec(self: *Self) void {
             c.y = val;
             c.p.updateZn(c.y);
         },
-        .lsr => {
-            // shift right
-            const acc = d.addr == null;
-            const val = if (acc) c.a else self.readBus(d.addr.?);
-            const res = val >> 1;
-            c.p.c = @intCast(val & 1);
-            // TODO: figure out if
-            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
-            // is incorrect (zero if A = 0)
-            c.p.updateZn(res);
-            if (acc) {
-                c.a = res;
-            } else {
-                self.writeBus(d.addr.?, res);
-            }
-        },
         .nop => {
             // no operation
-        },
-        .ora => {
-            // inclusive or
-            const val = self.readBus(d.addr.?);
-            c.a |= val;
-            c.p.updateZn(c.a);
         },
         .pha => {
             // push A
@@ -712,38 +708,6 @@ fn exec(self: *Self) void {
             // pop P
             c.p = @bitCast(self.popStack());
         },
-        .rol => {
-            // rotate left
-            const acc = d.addr == null;
-            const val = if (acc) c.a else self.readBus(d.addr.?);
-            const res = std.math.rotl(u8, val, 1);
-            c.p.c = @intCast(res & 1);
-            // TODO: figure out if
-            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
-            // is incorrect (zero if A = 0)
-            c.p.updateZn(res);
-            if (acc) {
-                c.a = res;
-            } else {
-                self.writeBus(d.addr.?, res);
-            }
-        },
-        .ror => {
-            // rotate right
-            const acc = d.addr == null;
-            const val = if (acc) c.a else self.readBus(d.addr.?);
-            const res = std.math.rotr(u8, val, 1);
-            c.p.c = @intCast(val & 1);
-            // TODO: figure out if
-            // https://www.nesdev.org/obelisk-6502-guide/reference.html#ASL
-            // is incorrect (zero if A = 0)
-            c.p.updateZn(res);
-            if (acc) {
-                c.a = res;
-            } else {
-                self.writeBus(d.addr.?, res);
-            }
-        },
         .rti => {
             // return from interrupt
             c.p = @bitCast(self.popStack());
@@ -752,9 +716,45 @@ fn exec(self: *Self) void {
             c.pc = self.popStackWide();
         },
         .rts => {
+            // return from subroutine
             c.pc = self.popStackWide() +% 1;
         },
-        .sbc => {},
+
+        inline .sta, .stx, .sty => |op| {
+            // store register
+            self.writeBus(d.addr.?, switch (op) {
+                .sta => c.a,
+                .stx => c.x,
+                .sty => c.y,
+                else => unreachable,
+            });
+        },
+
+        .tax => {
+            c.x = c.a;
+            c.p.updateZn(c.x);
+        },
+        .tay => {
+            c.y = c.a;
+            c.p.updateZn(c.y);
+        },
+        .tsx => {
+            c.x = c.s;
+            c.p.updateZn(c.x);
+        },
+        .txa => {
+            c.a = c.x;
+            c.p.updateZn(c.a);
+        },
+        .tya => {
+            c.a = c.y;
+            c.p.updateZn(c.a);
+        },
+        .txs => {
+            c.s = c.x;
+            // doesn't update flags
+        },
+
         else => {
             std.debug.print("exec: unimplemented\n", .{});
         },
