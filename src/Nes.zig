@@ -159,6 +159,14 @@ const Cpu = struct {
             if (self.p.n == 1) "[N]" else " n ",
         });
     }
+
+    /// Log register state for comparison
+    pub fn logStateFixed(self: *S, writer: std.io.AnyWriter) void {
+        writer.print(
+            "A:{X:02} X:{X:02} Y:{X:02} P:{X:02} SP:{X:02}\n",
+            .{ self.a, self.x, self.y, self.p.value(), self.s },
+        ) catch unreachable;
+    }
 };
 
 fn pushStack(self: *Self, val: u8) void {
@@ -172,8 +180,8 @@ fn pushStackWide(self: *Self, val: u16) void {
 }
 
 fn popStack(self: *Self) u8 {
-    const val = self.readBus(0x100 + @as(u16, self.cpu.s));
     self.cpu.s +%= 1;
+    const val = self.readBus(0x100 + @as(u16, self.cpu.s));
     return val;
 }
 
@@ -194,12 +202,14 @@ fn readImpl(self: *Self, addr: u16) u8 {
         0x2000...0x3fff => {
             // PPU registers
             // TODO
-            @panic("PPU registers");
+            return 0;
+            // @panic("PPU registers");
         },
         0x4000...0x4017 => {
             // APU and I/O registers
             // TODO
-            @panic("APU and I/O");
+            return 0;
+            // @panic("APU and I/O");
         },
         0x4018...0x401f => {
             // Disabled functionality
@@ -398,7 +408,7 @@ fn fetchTargetAddr(
             return self.readBusWide(iaddr);
         },
         inline .page0_x, .page0_y => |m| {
-            const reg_val = if (m == .abs_x) c.x else c.y;
+            const reg_val = if (m == .page0_x) c.x else c.y;
             return @as(u16, self.fetchPc() +% reg_val);
         },
         inline .abs_x, .abs_y => |m| {
@@ -455,15 +465,6 @@ const FullDecoded = struct {
     addr: ?u16,
 };
 
-/// Perform subtraction and set flags accordingly
-fn subImpl(c: *Cpu, a: u8, b: u8) u8 {
-    const res = @subWithOverflow(a, b);
-    c.p.c = res[1];
-    c.p.z = @intFromBool(res[0] == 0);
-    c.p.n = @intCast(res[0] >> 7);
-    return res[0];
-}
-
 /// Returns an internal representation of the data the instruction operates on
 fn cpuFetchDecode(self: *Self) FullDecoded {
     const start_pc = self.cpu.pc;
@@ -475,6 +476,7 @@ fn cpuFetchDecode(self: *Self) FullDecoded {
     const operand = instr.Operand.fromArg(m, arg);
     const addr = self.fetchTargetAddr(op, operand);
 
+    // _ = start_pc;
     std.debug.print("{x:05}: {s} {}\n", .{
         start_pc,
         @tagName(op),
@@ -524,8 +526,8 @@ fn exec(self: *Self) void {
             const res = switch (op) {
                 .asl => val << 1,
                 .lsr => val >> 1,
-                .rol => std.math.rotl(u8, val, 1),
-                .ror => std.math.rotr(u8, val, 1),
+                .rol => val << 1 | c.p.c,
+                .ror => val >> 1 | @as(u8, c.p.c) << 7,
                 else => unreachable,
             };
             c.p.c = @intCast(switch (op) {
@@ -583,8 +585,9 @@ fn exec(self: *Self) void {
             // bit test
             const val = self.readBus(d.addr.?);
             const res = val & c.a;
-            c.p.updateZn(res);
-            c.p.v = @intCast(res >> 6 & 1);
+            c.p.z = @intFromBool(res == 0);
+            c.p.v = @intCast(val >> 6 & 1);
+            c.p.n = @intCast(val >> 7 & 1);
         },
 
         .brk => {
@@ -636,7 +639,8 @@ fn exec(self: *Self) void {
                 else => unreachable,
             };
             const val = self.readBus(d.addr.?);
-            _ = subImpl(c, cmp, val);
+            c.p.c = @intFromBool(cmp >= val);
+            c.p.updateZn(cmp -% val);
         },
 
         inline .inc, .dec => |op| {
@@ -757,17 +761,20 @@ fn exec(self: *Self) void {
 
         else => {
             std.debug.print("exec: unimplemented\n", .{});
+            @panic("unimplemented");
         },
     }
 }
 
 pub fn debugStuff(self: *Self) void {
-    self.cpu.logState();
-    for (0..5) |_| {
+    self.cpu.pc = 0xc000;
+    const n_instr: usize = 8991;
+    var log_file = std.fs.cwd().createFile("other/my.log", .{}) catch unreachable;
+    defer log_file.close();
+    const w = log_file.writer().any();
+    for (0..n_instr) |_| {
+        w.print("{X:04} ", .{self.cpu.pc}) catch unreachable;
+        self.cpu.logStateFixed(w);
         self.exec();
-        std.debug.dumpHex(self.cpu_ram[0..10]);
-        std.debug.print("Stack:\n", .{});
-        std.debug.dumpHex(self.cpu_ram[@as(u16, self.cpu.s) + 0x100 .. 0x200]);
-        self.cpu.logState();
     }
 }
