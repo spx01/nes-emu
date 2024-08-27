@@ -461,12 +461,11 @@ fn prefetchArg(self: *Self, mode: instr.Mode) u16 {
 const FullDecoded = struct {
     op: instr.Op,
     operand: instr.Operand,
-    arg: u16,
     addr: ?u16,
 };
 
 /// Returns an internal representation of the data the instruction operates on
-fn cpuFetchDecode(self: *Self) FullDecoded {
+fn fetchDecode(self: *Self) FullDecoded {
     const start_pc = self.cpu.pc;
     const opcode = self.fetchPc();
     const decoded = instr.decode(opcode);
@@ -485,13 +484,16 @@ fn cpuFetchDecode(self: *Self) FullDecoded {
     return .{
         .op = op,
         .operand = operand,
-        .arg = arg,
         .addr = addr,
     };
 }
 
-fn exec(self: *Self) void {
-    const d = self.cpuFetchDecode();
+fn writeBusOldNew(self: *Self, addr: u16, old: u8, new: u8) void {
+    self.writeBus(addr, old);
+    self.writeBus(addr, new);
+}
+
+fn exec(self: *Self, d: FullDecoded) void {
     const c = &self.cpu;
     switch (d.op) {
         inline .adc, .sbc => |op| {
@@ -544,7 +546,7 @@ fn exec(self: *Self) void {
             if (acc) {
                 c.a = res;
             } else {
-                self.writeBus(d.addr.?, res);
+                self.writeBusOldNew(d.addr.?, val, res);
             }
         },
 
@@ -648,7 +650,7 @@ fn exec(self: *Self) void {
             const val = self.readBus(d.addr.?);
             const res = if (op == .dec) val -% 1 else val +% 1;
             c.p.updateZn(res);
-            self.writeBus(d.addr.?, res);
+            self.writeBusOldNew(d.addr.?, val, res);
         },
 
         .dex => {
@@ -759,6 +761,48 @@ fn exec(self: *Self) void {
             // doesn't update flags
         },
 
+        // illegal instructions
+        .lax => {
+            // LDA + LDX
+            var data = d;
+            data.op = .lda;
+            self.exec(data);
+            data.op = .ldx;
+            self.exec(data);
+        },
+        .sax => {
+            self.writeBus(d.addr.?, c.a & c.x);
+        },
+        .dcp => {
+            var data = d;
+            data.op = .dec;
+            self.exec(data);
+            data.op = .cmp;
+            self.exec(data);
+        },
+        .isc => {
+            var data = d;
+            data.op = .inc;
+            self.exec(data);
+            data.op = .sbc;
+            self.exec(data);
+        },
+        .slo => {
+            var data = d;
+            data.op = .asl;
+            self.exec(data);
+            data.op = .ora;
+            self.exec(data);
+        },
+        .rla => {
+            // var data = d;
+            // data.op = .rol;
+            // self.exec(data);
+            // data.op = .@"and";
+            // self.exec(data);
+            // FIX: broken
+        },
+
         else => {
             std.debug.print("exec: unimplemented\n", .{});
             @panic("unimplemented");
@@ -775,6 +819,6 @@ pub fn debugStuff(self: *Self) void {
     for (0..n_instr) |_| {
         w.print("{X:04} ", .{self.cpu.pc}) catch unreachable;
         self.cpu.logStateFixed(w);
-        self.exec();
+        self.exec(self.fetchDecode());
     }
 }
