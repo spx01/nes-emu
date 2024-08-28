@@ -1,1 +1,1 @@
-((nil . ((compile-command . "zig build --release=safe"))))
+((nil . ((compile-command . "zig build run"))))
