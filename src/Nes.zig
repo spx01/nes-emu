@@ -484,11 +484,36 @@ fn fetchDecode(self: *Self) FullDecoded {
     const addr = self.fetchTargetAddr(op, operand);
 
     // _ = start_pc;
-    std.debug.print("{x:05}: {s} {}\n", .{
+    std.debug.print("{x:05}: {s} {}", .{
         start_pc,
         @tagName(op),
         operand,
     });
+    switch (m) {
+        .rel => {
+            std.debug.print(" = ${X:04}", .{self.cpu.pc +% arg});
+        },
+        .page0, .abs => {
+            std.debug.print(" = ${X:02}", .{self.readImpl(addr.?)});
+        },
+        .ind => {
+            std.debug.print(" = ${X:04}", .{self.readImplWide(addr.?)});
+        },
+        .page0_x,
+        .page0_y,
+        .abs_x,
+        .abs_y,
+        .idx_ind,
+        .ind_idx,
+        => {
+            std.debug.print(" @ ${X:04} = ${X:02}", .{
+                addr.?,
+                self.readImpl(addr.?),
+            });
+        },
+        else => {},
+    }
+    std.debug.print("\n", .{});
     return .{
         .op = op,
         .operand = operand,
@@ -543,7 +568,7 @@ fn exec(self: *Self, d: FullDecoded) void {
             c.p.c = @intCast(switch (op) {
                 .asl => val >> 7,
                 .lsr => val & 1,
-                .rol => res & 1,
+                .rol => val >> 7,
                 .ror => val & 1,
                 else => unreachable,
             });
