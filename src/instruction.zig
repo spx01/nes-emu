@@ -191,6 +191,8 @@ pub const Op = enum {
     txs,
     tya,
     xaa,
+    /// Illegal version of SBC #imm
+    sbn,
 };
 
 const Decoded = struct { Op, Mode };
@@ -431,7 +433,7 @@ const op_table = [256]Decoded{
     .{ .inx, .implicit },
     .{ .sbc, .imm },
     .{ .nop, .implicit },
-    .{ .sbc, .imm },
+    .{ .sbn, .imm },
     .{ .cpx, .abs },
     .{ .sbc, .abs },
     .{ .inc, .abs },

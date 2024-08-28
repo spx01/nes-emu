@@ -799,7 +799,6 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         // illegal instructions
         .lax => {
-            // LDA + LDX
             var data = d;
             data.op = .lda;
             self.exec(data);
@@ -835,6 +834,27 @@ fn exec(self: *Self, d: FullDecoded) void {
             data.op = .rol;
             self.exec(data);
             data.op = .@"and";
+            self.exec(data);
+        },
+        .sre => {
+            var data = d;
+            data.op = .lsr;
+            self.exec(data);
+            data.op = .eor;
+            self.exec(data);
+        },
+        .rra => {
+            var data = d;
+            data.op = .ror;
+            self.exec(data);
+            data.op = .adc;
+            self.exec(data);
+        },
+        .sbn => {
+            var data = d;
+            data.op = .sbc;
+            self.exec(data);
+            data.op = .nop;
             self.exec(data);
         },
 
