@@ -101,16 +101,24 @@ const Cpu = struct {
         i: u1 = 1,
         /// Decimal
         d: u1 = 0,
-        /// B Flag
+        /// B Flag; always 0 in memory
         b: u1 = 0,
-        _always_1: u1 = 1,
+        /// Always 1 in memory and on stack
+        one: u1 = 1,
         /// Overflow
         v: u1 = 0,
         /// Negative
         n: u1 = 0,
 
         pub fn value(self: Flags) u8 {
+            std.debug.assert(self.one == 1 and self.b == 0);
             return @as(u8, @bitCast(self));
+        }
+
+        /// Value for stack pushing
+        pub fn pushValue(self: Flags, b: u1) u8 {
+            std.debug.assert(self.one == 1);
+            return @as(u8, @bitCast(self)) | @as(u8, b) << 4;
         }
 
         /// Updates Z and N flags for a given value
@@ -703,7 +711,7 @@ fn exec(self: *Self, d: FullDecoded) void {
         },
         .php => {
             // push P
-            self.pushStack(c.p.value());
+            self.pushStack(c.p.pushValue(1));
         },
         .pla => {
             // pop A
@@ -713,12 +721,14 @@ fn exec(self: *Self, d: FullDecoded) void {
         .plp => {
             // pop P
             c.p = @bitCast(self.popStack());
+            c.p.one = 1;
+            c.p.b = 0;
         },
         .rti => {
             // return from interrupt
             c.p = @bitCast(self.popStack());
-            // always keep B on 0
             c.p.b = 0;
+            c.p.one = 1;
             c.pc = self.popStackWide();
         },
         .rts => {
@@ -795,11 +805,11 @@ fn exec(self: *Self, d: FullDecoded) void {
             self.exec(data);
         },
         .rla => {
-            // var data = d;
-            // data.op = .rol;
-            // self.exec(data);
-            // data.op = .@"and";
-            // self.exec(data);
+            var data = d;
+            data.op = .rol;
+            self.exec(data);
+            data.op = .@"and";
+            self.exec(data);
             // FIX: broken
         },
 
