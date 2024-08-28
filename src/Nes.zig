@@ -855,8 +855,10 @@ fn exec(self: *Self, d: FullDecoded) void {
             data.op = .sbc;
             self.exec(data);
             data.op = .nop;
+            data.operand = .implicit;
             self.exec(data);
         },
+        // TODO: more illegal opcodes
 
         else => {
             std.debug.print("exec: unimplemented\n", .{});
