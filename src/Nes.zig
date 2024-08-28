@@ -484,20 +484,21 @@ fn fetchDecode(self: *Self) FullDecoded {
     const addr = self.fetchTargetAddr(op, operand);
 
     // _ = start_pc;
-    std.debug.print("{x:05}: {s} {}", .{
+    std.debug.print("{x:05}: {s}{s}{}", .{
         start_pc,
         @tagName(op),
+        if (operand.size() == 0) "" else " ",
         operand,
     });
     switch (m) {
         .rel => {
-            std.debug.print(" = ${X:04}", .{self.cpu.pc +% arg});
+            std.debug.print(" = ${x:04}", .{self.cpu.pc +% arg});
         },
         .page0, .abs => {
-            std.debug.print(" = ${X:02}", .{self.readImpl(addr.?)});
+            std.debug.print(" = ${x:02}", .{self.readImpl(addr.?)});
         },
         .ind => {
-            std.debug.print(" = ${X:04}", .{self.readImplWide(addr.?)});
+            std.debug.print(" = ${x:04}", .{self.readImplWide(addr.?)});
         },
         .page0_x,
         .page0_y,
@@ -506,7 +507,7 @@ fn fetchDecode(self: *Self) FullDecoded {
         .idx_ind,
         .ind_idx,
         => {
-            std.debug.print(" @ ${X:04} = ${X:02}", .{
+            std.debug.print(" @ ${x:04} = ${x:02}", .{
                 addr.?,
                 self.readImpl(addr.?),
             });
@@ -835,7 +836,6 @@ fn exec(self: *Self, d: FullDecoded) void {
             self.exec(data);
             data.op = .@"and";
             self.exec(data);
-            // FIX: broken
         },
 
         else => {
@@ -847,8 +847,12 @@ fn exec(self: *Self, d: FullDecoded) void {
 
 pub fn debugStuff(self: *Self) void {
     self.cpu.pc = 0xc000;
+    // know when to quit!
     const n_instr: usize = 8991;
-    var log_file = std.fs.cwd().createFile("other/my.log", .{}) catch unreachable;
+    var log_file = std.fs.cwd().createFile(
+        "other/my.log",
+        .{},
+    ) catch unreachable;
     defer log_file.close();
     const w = log_file.writer().any();
     for (0..n_instr) |_| {
