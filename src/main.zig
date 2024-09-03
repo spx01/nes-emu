@@ -15,8 +15,8 @@ pub fn main() !void {
     const assembled = instr.encodeStreamDebug(&test_data);
     std.debug.dumpHex(assembled);
 
-    // var machine = try Nes.fromRom(rom_file.reader().any());
-    var machine = try Nes.fromCpuInstructions(assembled);
+    var machine = try Nes.fromRom(rom_file.reader().any());
+    // var machine = try Nes.fromCpuInstructions(assembled);
     defer machine.deinit();
 
     machine.debugStuff();

@@ -239,6 +239,7 @@ fn readImplWide(self: *Self, addr: u16) u16 {
 
 /// Emulate reading from the bus
 fn readBus(self: *Self, addr: u16) u8 {
+    // TODO: controller port partial byte behavior
     self.bus_val = self.readImpl(addr);
     return self.bus_val;
 }
@@ -530,6 +531,15 @@ fn writeBusOldNew(self: *Self, addr: u16, old: u8, new: u8) void {
     self.writeBus(addr, new);
 }
 
+fn execMini(
+    self: *Self,
+    stream: []const struct { instr.Op, instr.Operand, ?u16 },
+) void {
+    for (stream) |i| {
+        self.exec(.{ .op = i[0], .operand = i[1], .addr = i[2] });
+    }
+}
+
 fn exec(self: *Self, d: FullDecoded) void {
     const c = &self.cpu;
     switch (d.op) {
@@ -634,9 +644,7 @@ fn exec(self: *Self, d: FullDecoded) void {
             // interrupts
             self.pushStackWide(c.pc);
             c.p.i = 1;
-            c.p.b = 1;
-            self.pushStack(c.p.value());
-            c.p.b = 0;
+            self.pushStack(c.p.pushValue(1));
             c.pc = self.readBusWide(0xfffe);
         },
 
@@ -803,66 +811,61 @@ fn exec(self: *Self, d: FullDecoded) void {
         // illegal instructions
         .lax => {
             if (d.operand == .implicit) {
-                @panic("unimplemented");
+                self.execMini(&.{
+                    .{ .lda, d.operand, d.addr },
+                    .{ .tax, .implicit, null },
+                });
+            } else {
+                self.execMini(&.{
+                    .{ .lda, d.operand, d.addr },
+                    .{ .ldx, d.operand, d.addr },
+                });
             }
-            var data = d;
-            data.op = .lda;
-            self.exec(data);
-            data.op = .ldx;
-            self.exec(data);
         },
         .sax => {
             self.writeBus(d.addr.?, c.a & c.x);
         },
         .dcp => {
-            var data = d;
-            data.op = .dec;
-            self.exec(data);
-            data.op = .cmp;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .dec, d.operand, d.addr },
+                .{ .cmp, d.operand, d.addr },
+            });
         },
         .isc => {
-            var data = d;
-            data.op = .inc;
-            self.exec(data);
-            data.op = .sbc;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .inc, d.operand, d.addr },
+                .{ .sbc, d.operand, d.addr },
+            });
         },
         .slo => {
-            var data = d;
-            data.op = .asl;
-            self.exec(data);
-            data.op = .ora;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .asl, d.operand, d.addr },
+                .{ .ora, d.operand, d.addr },
+            });
         },
         .rla => {
-            var data = d;
-            data.op = .rol;
-            self.exec(data);
-            data.op = .@"and";
-            self.exec(data);
+            self.execMini(&.{
+                .{ .rol, d.operand, d.addr },
+                .{ .@"and", d.operand, d.addr },
+            });
         },
         .sre => {
-            var data = d;
-            data.op = .lsr;
-            self.exec(data);
-            data.op = .eor;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .lsr, d.operand, d.addr },
+                .{ .eor, d.operand, d.addr },
+            });
         },
         .rra => {
-            var data = d;
-            data.op = .ror;
-            self.exec(data);
-            data.op = .adc;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .ror, d.operand, d.addr },
+                .{ .adc, d.operand, d.addr },
+            });
         },
         .sbn => {
-            var data = d;
-            data.op = .sbc;
-            self.exec(data);
-            data.op = .nop;
-            data.operand = .implicit;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .sbc, d.operand, d.addr },
+                .{ .nop, .implicit, null },
+            });
         },
         .stp => {
             // TODO: halting mechanism
@@ -871,42 +874,50 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         // TODO: test instructions below this point
         .anc => {
-            var data = d;
-            data.op = .@"and";
-            self.exec(data);
+            self.execMini(&.{
+                .{ .@"and", d.operand, d.addr },
+            });
             c.p.c = @intCast(c.a >> 7);
         },
         inline .alr, .arr => |op| {
-            var data = d;
-            data.op = .@"and";
-            self.exec(data);
-            data.op = if (op == .alr) .lsr else .ror;
-            data.operand = .implicit;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .@"and", d.operand, d.addr },
+                .{ if (op == .alr) .lsr else .ror, .implicit, null },
+            });
         },
         .xaa => {
-            var data = d;
-            data.op = .txa;
-            data.operand = .implicit;
-            self.exec(data);
-            data.op = .@"and";
-            data.operand = d.operand;
-            self.exec(data);
+            self.execMini(&.{
+                .{ .txa, .implicit, null },
+                .{ .@"and", d.operand, d.addr },
+            });
         },
         .axs => {
             const val = self.readBus(d.addr.?);
             c.x = (c.a & c.x) -% val;
         },
-        .ahx, .las, .shx, .shy, .tas => {
-            std.debug.print("exec: unimplemented\n", .{});
-            @panic("unimplemented");
+        inline .ahx, .shx, .shy => |op| {
+            const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
+            const val1 = if (op == .ahx) c.a else 0xff;
+            const val2 = if (op == .shy) c.y else c.x;
+            self.writeBus(d.addr.?, val1 & val2 & h);
+        },
+        .tas => {
+            const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
+            c.s = c.a & c.x;
+            self.writeBus(d.addr.?, c.a & c.x & h);
+        },
+        .las => {
+            const val = self.readBus(d.addr.?) & c.s;
+            c.a = val;
+            c.x = val;
+            c.s = val;
         },
     }
 }
 
 pub fn debugStuff(self: *Self) void {
     self.cpu.pc = 0xc000;
-    self.cpu.pc = 0;
+    // self.cpu.pc = 0;
     // know when to quit!
     const n_instr: usize = 8991;
     var log_file = std.fs.cwd().createFile(
