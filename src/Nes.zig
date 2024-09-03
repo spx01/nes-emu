@@ -5,6 +5,8 @@ const instr = @import("instruction.zig");
 m: AnyMapper,
 cpu_ram: *[0x800]u8,
 cpu: Cpu,
+/// Last read byte from the bus
+bus_val: u8 = 0,
 
 const Self = @This();
 
@@ -33,11 +35,10 @@ const Mapper0 = struct {
 
     const mirror_mask = 0xbfff;
 
-    pub fn read(self: *S, addr: u16) u8 {
+    pub fn read(self: *S, addr: u16) ?u8 {
         if (addr < 0x8000) {
-            // Maybe RAM, or invalid
-            // TODO: open bus behavior?
-            @panic("low PRG address");
+            // No WRAM, open bus
+            return null;
         }
         const masked = (addr & mirror_mask) - 0x8000;
         return self.prg_rom[masked];
@@ -224,7 +225,7 @@ fn readImpl(self: *Self, addr: u16) u8 {
             @panic("disabled functionality");
         },
         0x4020...0xffff => {
-            return self.m.read(addr);
+            return self.m.read(addr) orelse self.bus_val;
         },
     }
     unreachable;
@@ -238,7 +239,8 @@ fn readImplWide(self: *Self, addr: u16) u16 {
 
 /// Emulate reading from the bus
 fn readBus(self: *Self, addr: u16) u8 {
-    return self.readImpl(addr);
+    self.bus_val = self.readImpl(addr);
+    return self.bus_val;
 }
 
 /// Doesn't deal with page wrapping
@@ -627,7 +629,7 @@ fn exec(self: *Self, d: FullDecoded) void {
         },
 
         .brk => {
-            // TODO: figure out if there is more beahvior to implement for
+            // TODO: figure out if there is additional behavior to implement for
             // interrupts
             self.pushStackWide(c.pc);
             c.p.i = 1;
@@ -858,6 +860,10 @@ fn exec(self: *Self, d: FullDecoded) void {
             data.operand = .implicit;
             self.exec(data);
         },
+        .stp => {
+            // TODO: halting mechanism
+            @panic("CPU halt");
+        },
         // TODO: more illegal opcodes
 
         else => {
@@ -869,6 +875,7 @@ fn exec(self: *Self, d: FullDecoded) void {
 
 pub fn debugStuff(self: *Self) void {
     self.cpu.pc = 0xc000;
+    self.cpu.pc = 0;
     // know when to quit!
     const n_instr: usize = 8991;
     var log_file = std.fs.cwd().createFile(

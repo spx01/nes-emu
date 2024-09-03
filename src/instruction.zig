@@ -39,7 +39,6 @@ pub const Operand = union(enum) {
 
     pub fn toArg(self: Self) u16 {
         switch (self) {
-            // TODO: figure out what to do here, maybe panic
             .implicit => return 0,
             inline else => |val| return @as(u16, @intCast(val)),
         }
