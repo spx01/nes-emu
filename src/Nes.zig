@@ -486,6 +486,7 @@ fn fetchDecode(self: *Self) FullDecoded {
     const addr = self.fetchTargetAddr(op, operand);
 
     // _ = start_pc;
+    // TODO: extract this into a logging function
     std.debug.print("{x:05}: {s}{s}{}", .{
         start_pc,
         @tagName(op),
@@ -801,6 +802,9 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         // illegal instructions
         .lax => {
+            if (d.operand == .implicit) {
+                @panic("unimplemented");
+            }
             var data = d;
             data.op = .lda;
             self.exec(data);
@@ -864,9 +868,36 @@ fn exec(self: *Self, d: FullDecoded) void {
             // TODO: halting mechanism
             @panic("CPU halt");
         },
-        // TODO: more illegal opcodes
 
-        else => {
+        // TODO: test instructions below this point
+        .anc => {
+            var data = d;
+            data.op = .@"and";
+            self.exec(data);
+            c.p.c = @intCast(c.a >> 7);
+        },
+        inline .alr, .arr => |op| {
+            var data = d;
+            data.op = .@"and";
+            self.exec(data);
+            data.op = if (op == .alr) .lsr else .ror;
+            data.operand = .implicit;
+            self.exec(data);
+        },
+        .xaa => {
+            var data = d;
+            data.op = .txa;
+            data.operand = .implicit;
+            self.exec(data);
+            data.op = .@"and";
+            data.operand = d.operand;
+            self.exec(data);
+        },
+        .axs => {
+            const val = self.readBus(d.addr.?);
+            c.x = (c.a & c.x) -% val;
+        },
+        .ahx, .las, .shx, .shy, .tas => {
             std.debug.print("exec: unimplemented\n", .{});
             @panic("unimplemented");
         },

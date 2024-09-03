@@ -114,7 +114,6 @@ pub fn getOperandSize(m: Mode) u8 {
 pub const Op = enum {
     adc,
     ahx,
-    aldy,
     alr,
     anc,
     @"and",
@@ -131,7 +130,6 @@ pub const Op = enum {
     brk,
     bvc,
     bvs,
-    ccpy,
     clc,
     cld,
     cli,
@@ -143,7 +141,6 @@ pub const Op = enum {
     dec,
     dex,
     dey,
-    ecpx,
     eor,
     inc,
     inx,
