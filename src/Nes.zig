@@ -17,7 +17,7 @@ const page_size = 0x4000;
 /// NROM
 const Mapper0 = struct {
     // Only one page for now
-    // TODO
+    // TODO: mapper
     prg_rom: [page_size]u8,
 
     // TODO: PPU
@@ -210,13 +210,13 @@ fn readImpl(self: *Self, addr: u16) u8 {
         },
         0x2000...0x3fff => {
             // PPU registers
-            // TODO
+            // TODO: PPU
             return 0;
             // @panic("PPU registers");
         },
         0x4000...0x4017 => {
             // APU and I/O registers
-            // TODO
+            // TODO: IO
             return 0;
             // @panic("APU and I/O");
         },
@@ -260,12 +260,12 @@ fn writeBus(self: *Self, addr: u16, val: u8) void {
         },
         0x2000...0x3fff => {
             // PPU registers
-            // TODO
+            // TODO: PPU
             @panic("PPU registers");
         },
         0x4000...0x4017 => {
             // APU and I/O registers
-            // TODO
+            // TODO: IO
             @panic("APU and I/O");
         },
         0x4018...0x401f => {
@@ -291,21 +291,19 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
         /// Size of CHR ROM in 8KB units.
         chr_npages: u8,
 
-        nametable_arr: u1, // TODO
-        extra_mem: bool, // TODO
-        trainer: bool, // TODO
-        alt_nametable: bool, // TODO
+        // TODO: mapper
+        nametable_arr: u1,
+        extra_mem: bool,
+        trainer: bool,
+        alt_nametable: bool,
         mapper_lower: u4,
-        vs_unisystem: bool, // TODO
-        playchoice_10: bool, // TODO
+        vs_unisystem: bool,
+        playchoice_10: bool,
         nes2_id: u2,
         mapper_upper: u4,
 
-        /// TODO
         _flags8: u8,
-        /// TODO
         _flags9: u8,
-        /// TODO
         _flags10: u8,
         _pad: u40,
     };
