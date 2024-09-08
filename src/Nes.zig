@@ -239,8 +239,15 @@ fn readImplWide(self: *Self, addr: u16) u16 {
 
 /// Emulate reading from the bus
 fn readBus(self: *Self, addr: u16) u8 {
-    // TODO: controller port partial byte behavior
-    self.bus_val = self.readImpl(addr);
+    const val = self.readImpl(addr);
+    if (addr & 0xfffe == 0x4016) {
+        // Controller ports only affect the lowest 5 bits
+        @branchHint(.cold);
+        const mask: u8 = 0b11111;
+        std.debug.assert(val & mask == 0);
+        self.bus_val = self.bus_val & ~mask;
+        self.bus_val |= val & mask;
+    }
     return self.bus_val;
 }
 
