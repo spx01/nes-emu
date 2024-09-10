@@ -1,24 +1,36 @@
 const std = @import("std");
 const util = @import("util.zig");
 const instr = @import("instruction.zig");
+const AnyMapper = @import("Mapper.zig");
+
+// PPU-specific functionality implemented here
+usingnamespace @import("ppu.zig");
 
 m: AnyMapper,
 cpu_ram: *[0x800]u8,
 cpu: Cpu,
+
 /// Last read byte from the bus
 bus_val: u8 = 0,
 
+// PPU
+/// Palette index RAM
+pram: [0x20]u8,
+/// Object Attribute Memory
+oam: [0x100]u8,
+
 const Self = @This();
-
-const AnyMapper = @import("Mapper.zig");
-
-const page_size = 0x4000;
 
 /// NROM
 const Mapper0 = struct {
     // Only one page for now
     // TODO: mapper
-    prg_rom: [page_size]u8,
+
+    const prg_unit_size = 0x4000;
+    /// 16KiB of PRG
+    prg_rom: [prg_unit_size * 1]u8,
+    /// 8KiB of CHR
+    chr_rom: [0x2000]u8,
 
     // TODO: PPU
 
@@ -29,7 +41,10 @@ const Mapper0 = struct {
         const ret = try util.alloc.create(S);
         errdefer util.alloc.destroy(ret);
         const cnt = try prg_data_stream.read(&ret.prg_rom);
-        if (cnt != page_size) return error.ROMData;
+        if (cnt != prg_unit_size) return error.ROMData;
+        if (try prg_data_stream.discard() != 0) {
+            std.debug.print("Trailing ROM data\n", .{});
+        }
         return ret;
     }
 
@@ -921,7 +936,7 @@ fn exec(self: *Self, d: FullDecoded) void {
 }
 
 pub fn debugStuff(self: *Self) void {
-    self.cpu.pc = 0xc000;
+    // self.cpu.pc = 0xc000;
     // self.cpu.pc = 0;
     // know when to quit!
     const n_instr: usize = 8991;
