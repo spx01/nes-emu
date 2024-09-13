@@ -268,6 +268,8 @@ fn readBus(self: *Self, addr: u16) u8 {
         std.debug.assert(val & mask == 0);
         self.bus_val = self.bus_val & ~mask;
         self.bus_val |= val & mask;
+    } else {
+        self.bus_val = self.readImpl(addr);
     }
     return self.bus_val;
 }
