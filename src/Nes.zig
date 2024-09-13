@@ -355,6 +355,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     var ret: Self = .{};
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
     errdefer util.alloc.destroy(ret.cpu_ram);
+    @memset(ret.cpu_ram, 0);
 
     ret.ppu = try util.alloc.create(@TypeOf(ret.ppu.?.*));
     errdefer util.alloc.destroy(ret.ppu.?);
