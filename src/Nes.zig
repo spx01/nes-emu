@@ -168,7 +168,7 @@ const Cpu = struct {
 
     pub fn reset(self: *S, n: *Nes) void {
         self.p.i = 1;
-        self.pc = n.readBusWide(0xfffc);
+        self.pc = n.readImplWide(0xfffc);
         self.s -%= 3;
     }
 
