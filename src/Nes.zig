@@ -14,6 +14,10 @@ ppu: ?*Ppu = undefined,
 /// Last read byte from the bus
 bus_val: u8 = 0,
 
+cur_cycle: u64 = 0,
+/// Estimated cycles for the currently executing instruction
+est_cycles: u8 = undefined,
+
 pub const Ppu = struct {
     /// Palette index RAM
     pram: [0x20]u8,
@@ -21,6 +25,8 @@ pub const Ppu = struct {
     oam: [0x100]u8,
     /// VRAM for nametables
     vram: [0x1000]u8,
+
+    // Internal registers go here
 };
 
 const Self = @This();
@@ -35,8 +41,6 @@ const Mapper0 = struct {
     prg_rom: [prg_unit_size * 1]u8,
     /// 8KiB of CHR
     chr_rom: [0x2000]u8,
-
-    // TODO: PPU
 
     const S = @This();
 
@@ -189,15 +193,16 @@ const Cpu = struct {
             if (self.p.n == 1) "[N]" else " n ",
         });
     }
-
-    /// Log register state for comparison
-    pub fn logStateFixed(self: *S, writer: std.io.AnyWriter) void {
-        writer.print(
-            "A:{X:02} X:{X:02} Y:{X:02} P:{X:02} SP:{X:02}\n",
-            .{ self.a, self.x, self.y, self.p.value(), self.s },
-        ) catch unreachable;
-    }
 };
+
+/// Log register state for comparison with nestest.log
+pub fn logStateFixed(self: *Self, writer: std.io.AnyWriter) void {
+    const c = &self.cpu;
+    writer.print(
+        "A:{X:02} X:{X:02} Y:{X:02} P:{X:02} SP:{X:02} CYC:{}",
+        .{ c.a, c.x, c.y, c.p.value(), c.s, self.cur_cycle + 7 },
+    ) catch unreachable;
+}
 
 fn pushStack(self: *Self, val: u8) void {
     self.writeBus(0x100 + @as(u16, self.cpu.s), val);
@@ -260,6 +265,7 @@ fn readImplWide(self: *Self, addr: u16) u16 {
 
 /// Emulate reading from the bus
 fn readBus(self: *Self, addr: u16) u8 {
+    self.est_cycles += 1;
     const val = self.readImpl(addr);
     if (addr & 0xfffe == 0x4016) {
         // Controller ports only affect the lowest 5 bits
@@ -282,6 +288,7 @@ fn readBusWide(self: *Self, addr: u16) u16 {
 }
 
 fn writeBus(self: *Self, addr: u16, val: u8) void {
+    self.est_cycles += 1;
     switch (addr) {
         0...0x1fff => {
             // Read from CPU memory
@@ -410,28 +417,32 @@ fn fetchPcWide(self: *Self) u16 {
     return ret;
 }
 
+fn checkPageCross(old: u16, new: u16) bool {
+    return old >> 8 != new >> 8;
+}
+
 fn fetchTargetAddr(
     self: *Self,
     op: instr.Op,
     mode: instr.Mode,
 ) ?u16 {
     const c = &self.cpu;
-    const force_page_cross = op == .sta or op == .stx or op == .sty;
+    const force_page_cross = switch (op) {
+        .sta, .stx, .sty => true,
+        else => op.isRmw(),
+    };
     switch (mode) {
         .implicit => {
             return null;
         },
         .imm => {
-            // the idea is to not do a bus read here, just return the address
-            // and increment the PC as if nothing happened, considering a read
-            // at the address is going to be done during execution anyways
-            // TODO: is this a good approach?
             const addr = c.pc;
             c.pc +%= 1;
             return addr;
         },
         .rel => {
-            // TODO: cycle counting for page crossing
+            // NOTE: The exec function has to check if a page crossing occurred,
+            // as the additional cycles only get added if the branch is taken
             const off = @as(i8, @bitCast(self.fetchPc()));
             return c.pc +% @as(u16, @bitCast(@as(i16, off)));
         },
@@ -446,7 +457,7 @@ fn fetchTargetAddr(
         .ind => {
             const iaddr = self.fetchPcWide();
             if (iaddr & 0xff == 0xff) {
-                // the NES doesn't handle page crossing properly for indirect
+                // The NES doesn't handle page crossing properly for indirect
                 // addressing
                 const lo = self.readBus(iaddr);
                 const hi = self.readBus(iaddr & 0xff00);
@@ -455,6 +466,7 @@ fn fetchTargetAddr(
             return self.readBusWide(iaddr);
         },
         inline .page0_x, .page0_y => |m| {
+            self.est_cycles += 1;
             const reg_val = if (m == .page0_x) c.x else c.y;
             return @as(u16, self.fetchPc() +% reg_val);
         },
@@ -462,19 +474,18 @@ fn fetchTargetAddr(
             const reg_val = if (m == .abs_x) c.x else c.y;
             var addr = self.fetchPcWide();
 
-            // if page crossing occurs, the CPU performs a dummy read (?)
-            // TODO: also waste a cycle when cycle counting is implemented
-            // TODO: figure out if my reading of this behavior is correct
-            const res = @addWithOverflow(
-                @as(u8, @intCast(addr & 0xff)),
-                reg_val,
-            );
-            addr = addr & 0xff00 | res[0];
-            // store instructions always do this read, use a parameter (?)
-            if (res[1] == 1 or force_page_cross) _ = self.readBus(addr);
-            return addr +% (@as(u16, res[1]) << 8);
+            // If page crossing occurs, the CPU performs a dummy read
+            // (or if the operation is STA, STX, STY)
+            const old_addr = addr;
+            addr +%= reg_val;
+            if (force_page_cross or checkPageCross(old_addr, addr)) {
+                _ = self.readBus(old_addr);
+            }
+
+            return addr;
         },
         .idx_ind => {
+            self.est_cycles += 1;
             const off = self.fetchPc();
             const base = off +% c.x;
             const lo = self.readBus(base);
@@ -486,10 +497,15 @@ fn fetchTargetAddr(
             const lo = self.readBus(off);
             const hi = self.readBus(off +% 1);
             var addr = lo | @as(u16, hi) << 8;
-            const res = @addWithOverflow(@as(u8, @intCast(addr & 0xff)), c.y);
-            addr = addr & 0xff00 | res[0];
-            if (res[1] == 1) _ = self.readBus(addr);
-            return addr +% (@as(u16, res[1]) << 8);
+
+            // Handle special page crossing behavior
+            // (similar to abs_x and abs_y)
+            const old_addr = addr;
+            addr +%= c.y;
+            if (force_page_cross or checkPageCross(old_addr, addr)) {
+                _ = self.readBus(old_addr);
+            }
+            return addr;
         },
     }
 }
@@ -578,6 +594,18 @@ fn execMini(
 
 fn exec(self: *Self, d: FullDecoded) void {
     const c = &self.cpu;
+    const old_pc = c.pc;
+
+    switch (d.op) {
+        .brk, .jsr, .pha, .php => {
+            self.est_cycles += 1;
+        },
+        .pla, .plp, .rti, .rts => {
+            self.est_cycles += 2;
+        },
+        else => {},
+    }
+
     switch (d.op) {
         inline .adc, .sbc => |op| {
             // add/subtract with carry
@@ -807,6 +835,8 @@ fn exec(self: *Self, d: FullDecoded) void {
         .rts => {
             // return from subroutine
             c.pc = self.popStackWide() +% 1;
+            // It's supposed to take 6 cycles
+            self.est_cycles += 1;
         },
 
         inline .sta, .stx, .sty => |op| {
@@ -846,7 +876,7 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         // illegal instructions
         .lax => {
-            if (d.operand == .implicit) {
+            if (d.operand == .imm) {
                 self.execMini(&.{
                     .{ .lda, d.operand, d.addr },
                     .{ .tax, .implicit, null },
@@ -857,6 +887,15 @@ fn exec(self: *Self, d: FullDecoded) void {
                     .{ .ldx, d.operand, d.addr },
                 });
             }
+            self.est_cycles = switch (d.operand) {
+                .idx_ind => 6,
+                .page0 => 3,
+                .abs, .page0_y, .abs_y => 4,
+                // TODO: investigate
+                // .ind_idx => 5,
+                .ind_idx => 6,
+                else => unreachable,
+            };
         },
         .sax => {
             self.writeBus(d.addr.?, c.a & c.x);
@@ -900,7 +939,8 @@ fn exec(self: *Self, d: FullDecoded) void {
         .sbn => {
             self.execMini(&.{
                 .{ .sbc, d.operand, d.addr },
-                .{ .nop, .implicit, null },
+                // TODO: investigate
+                // .{ .nop, .implicit, null },
             });
         },
         .stp => {
@@ -908,51 +948,102 @@ fn exec(self: *Self, d: FullDecoded) void {
             @panic("CPU halt");
         },
 
-        // TODO: test instructions below this point
+        // Mostly untested instructions below
         .anc => {
             self.execMini(&.{
                 .{ .@"and", d.operand, d.addr },
             });
             c.p.c = @intCast(c.a >> 7);
+            self.est_cycles = 2;
         },
         inline .alr, .arr => |op| {
             self.execMini(&.{
                 .{ .@"and", d.operand, d.addr },
                 .{ if (op == .alr) .lsr else .ror, .implicit, null },
             });
+            self.est_cycles = 2;
         },
         .xaa => {
             self.execMini(&.{
                 .{ .txa, .implicit, null },
                 .{ .@"and", d.operand, d.addr },
             });
+            self.est_cycles = 0; // TODO
         },
         .axs => {
             const val = self.readBus(d.addr.?);
             c.x = (c.a & c.x) -% val;
+            self.est_cycles = 2;
         },
         inline .ahx, .shx, .shy => |op| {
             const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
             const val1 = if (op == .ahx) c.a else 0xff;
             const val2 = if (op == .shy) c.y else c.x;
             self.writeBus(d.addr.?, val1 & val2 & h);
+            self.est_cycles = 0; // TODO
         },
         .tas => {
             const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
             c.s = c.a & c.x;
             self.writeBus(d.addr.?, c.a & c.x & h);
+            self.est_cycles = 0; // TODO
         },
         .las => {
             const val = self.readBus(d.addr.?) & c.s;
             c.a = val;
             c.x = val;
             c.s = val;
+            self.est_cycles = 0; // TODO
         },
+
+        .ign => {
+            if (d.operand == .page0_x) {
+                self.est_cycles -= 1;
+                // IGN d,X reads at d as well
+                _ = self.readBus(self.readImpl(c.pc -% 1));
+            }
+            _ = self.readBus(d.addr.?);
+        },
+    }
+
+    // RMW illegal cycle counts
+    switch (d.op) {
+        .dcp, .isc, .rla, .rra, .slo, .sre => {
+            self.est_cycles = switch (d.operand) {
+                .idx_ind, .ind_idx => 8,
+                .abs_x, .abs_y => 7,
+                .abs, .page0_x => 6,
+                .page0 => 5,
+                else => unreachable,
+            };
+        },
+        else => {},
+    }
+
+    if (d.operand == .rel and c.pc != old_pc) {
+        // Branch taken case
+        self.est_cycles += 1;
+        if (checkPageCross(old_pc, c.pc)) {
+            self.est_cycles += 1;
+        }
     }
 }
 
+pub fn tick(self: *Self) void {
+    self.est_cycles = 0;
+    self.exec(self.fetchDecode());
+    if (self.est_cycles == 1) {
+        // 2 cycles is the minimum
+        self.est_cycles += 1;
+    }
+    if (self.est_cycles == 0) {
+        @panic("unfinished instruction encountered");
+    }
+    self.cur_cycle += self.est_cycles;
+}
+
 pub fn debugStuff(self: *Self) void {
-    // self.cpu.pc = 0xc000;
+    self.cpu.pc = 0xc000;
     // self.cpu.pc = 0;
     // know when to quit!
     const n_instr: usize = 8991;
@@ -964,7 +1055,8 @@ pub fn debugStuff(self: *Self) void {
     const w = log_file.writer().any();
     for (0..n_instr) |_| {
         w.print("{X:04} ", .{self.cpu.pc}) catch unreachable;
-        self.cpu.logStateFixed(w);
-        self.exec(self.fetchDecode());
+        self.logStateFixed(w);
+        _ = w.write("\n") catch unreachable;
+        self.tick();
     }
 }

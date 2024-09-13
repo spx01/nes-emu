@@ -13,10 +13,10 @@ pub fn main() !void {
         .{ .stp, .implicit },
     };
     const assembled = instr.encodeStreamDebug(&test_data);
-    std.debug.dumpHex(assembled);
+    _ = assembled;
 
-    // var machine = try Nes.fromRom(rom_file.reader().any());
-    var machine = try Nes.fromCpuInstructions(assembled);
+    var machine = try Nes.fromRom(rom_file.reader().any());
+    // var machine = try Nes.fromCpuInstructions(assembled);
     defer machine.destroy();
 
     machine.debugStuff();
