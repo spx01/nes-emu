@@ -6,10 +6,10 @@ const AnyMapper = @import("Mapper.zig");
 // PPU-specific functionality implemented here
 usingnamespace @import("ppu.zig");
 
-m: AnyMapper,
-cpu_ram: *[0x800]u8,
-cpu: Cpu,
-ppu: ?*Ppu,
+m: AnyMapper = undefined,
+cpu_ram: *[0x800]u8 = undefined,
+cpu: Cpu = undefined,
+ppu: ?*Ppu = undefined,
 
 /// Last read byte from the bus
 bus_val: u8 = 0,
@@ -352,7 +352,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
     std.debug.assert(mapper_val == 0); // only Mapper0 supported
 
-    var ret: Self = undefined;
+    var ret: Self = .{};
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
     errdefer util.alloc.destroy(ret.cpu_ram);
 
@@ -370,7 +370,7 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
 
 /// Initialize code straight into CPU RAM and prepare execution at $0
 pub fn fromCpuInstructions(data: []const u8) !Self {
-    var ret: Self = undefined;
+    var ret: Self = .{};
 
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
     errdefer util.alloc.destroy(ret.cpu_ram);
