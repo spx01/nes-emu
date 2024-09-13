@@ -9,15 +9,19 @@ usingnamespace @import("ppu.zig");
 m: AnyMapper,
 cpu_ram: *[0x800]u8,
 cpu: Cpu,
+ppu: ?*Ppu,
 
 /// Last read byte from the bus
 bus_val: u8 = 0,
 
-// PPU
-/// Palette index RAM
-pram: [0x20]u8,
-/// Object Attribute Memory
-oam: [0x100]u8,
+pub const Ppu = struct {
+    /// Palette index RAM
+    pram: [0x20]u8,
+    /// Object Attribute Memory
+    oam: [0x100]u8,
+    /// VRAM for nametables
+    vram: [0x1000]u8,
+};
 
 const Self = @This();
 
@@ -40,11 +44,13 @@ const Mapper0 = struct {
         // TODO: maybe the mapper should receive the entire ROM file?
         const ret = try util.alloc.create(S);
         errdefer util.alloc.destroy(ret);
+
         const cnt = try prg_data_stream.read(&ret.prg_rom);
         if (cnt != prg_unit_size) return error.ROMData;
         if (try prg_data_stream.discard() != 0) {
             std.debug.print("Trailing ROM data\n", .{});
         }
+
         return ret;
     }
 
@@ -75,7 +81,7 @@ const Mapper0 = struct {
             .vt = &.{
                 .read = @ptrCast(&S.read),
                 .write = @ptrCast(&S.write),
-                .deinit = @ptrCast(&S.destroy),
+                .destroy = @ptrCast(&S.destroy),
             },
         };
     }
@@ -94,7 +100,7 @@ const DummyMapper = struct {
             .vt = &.{
                 .read = @ptrCast(&S.read),
                 .write = @ptrCast(&S.write),
-                .deinit = null,
+                .destroy = null,
             },
         };
     }
@@ -348,8 +354,11 @@ pub fn fromRom(reader: std.io.AnyReader) !Self {
     ret.cpu_ram = try util.alloc.create(@TypeOf(ret.cpu_ram.*));
     errdefer util.alloc.destroy(ret.cpu_ram);
 
+    ret.ppu = try util.alloc.create(@TypeOf(ret.ppu.?.*));
+    errdefer util.alloc.destroy(ret.ppu.?);
+
     ret.m = (try Mapper0.create(reader)).any();
-    errdefer ret.m.deinit();
+    errdefer ret.m.destroy();
 
     ret.cpu = Cpu.init();
     ret.cpu.reset(&ret);
@@ -367,15 +376,19 @@ pub fn fromCpuInstructions(data: []const u8) !Self {
     std.debug.assert(data.len <= ret.cpu_ram.len);
     @memcpy(@as([*]u8, ret.cpu_ram), data);
 
+    ret.ppu = null;
     ret.m = DummyMapper.any();
     ret.cpu = Cpu.init();
     ret.cpu.reset(&ret);
     return ret;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn destroy(self: *Self) void {
     util.alloc.destroy(self.cpu_ram);
-    self.m.deinit();
+    if (self.ppu) |p| {
+        util.alloc.destroy(p);
+    }
+    self.m.destroy();
 }
 
 pub fn update(self: *Self) void {

@@ -17,7 +17,7 @@ pub fn main() !void {
 
     // var machine = try Nes.fromRom(rom_file.reader().any());
     var machine = try Nes.fromCpuInstructions(assembled);
-    defer machine.deinit();
+    defer machine.destroy();
 
     machine.debugStuff();
 }

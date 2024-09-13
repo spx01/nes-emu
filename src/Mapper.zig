@@ -9,7 +9,7 @@ const Self = @This();
 pub const VTable = struct {
     read: *const fn (context: *allowzero anyopaque, addr: u16) ?u8,
     write: *const fn (context: *allowzero anyopaque, addr: u16, val: u8) void,
-    deinit: ?*const fn (context: *anyopaque) void,
+    destroy: ?*const fn (context: *anyopaque) void,
 };
 
 pub const Type = enum(u8) {
@@ -25,6 +25,8 @@ pub fn write(self: *Self, addr: u16, val: u8) void {
     self.vt.write(self.context, addr, val);
 }
 
-pub fn deinit(self: *Self) void {
-    if (self.vt.deinit) |f| f(self.context);
+pub fn destroy(self: *Self) void {
+    if (self.vt.destroy) |f| {
+        f(self.context);
+    }
 }
