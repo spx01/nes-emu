@@ -891,9 +891,10 @@ fn exec(self: *Self, d: FullDecoded) void {
                 .idx_ind => 6,
                 .page0 => 3,
                 .abs, .page0_y, .abs_y => 4,
-                // TODO: investigate
-                // .ind_idx => 5,
-                .ind_idx => 6,
+                .ind_idx => 5,
+                // nestest.log is wrong? or page crossing has to be taken into
+                // acount
+                // .ind_idx => 6,
                 else => unreachable,
             };
         },
