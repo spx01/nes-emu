@@ -969,7 +969,7 @@ fn exec(self: *Self, d: FullDecoded) void {
                 .{ .txa, .implicit, null },
                 .{ .@"and", d.operand, d.addr },
             });
-            self.est_cycles = 0; // TODO
+            self.est_cycles = 0; // TODO: cycle counting
         },
         .axs => {
             const val = self.readBus(d.addr.?);
@@ -981,20 +981,20 @@ fn exec(self: *Self, d: FullDecoded) void {
             const val1 = if (op == .ahx) c.a else 0xff;
             const val2 = if (op == .shy) c.y else c.x;
             self.writeBus(d.addr.?, val1 & val2 & h);
-            self.est_cycles = 0; // TODO
+            self.est_cycles = 0; // TODO: cycle counting
         },
         .tas => {
             const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
             c.s = c.a & c.x;
             self.writeBus(d.addr.?, c.a & c.x & h);
-            self.est_cycles = 0; // TODO
+            self.est_cycles = 0; // TODO: cycle counting
         },
         .las => {
             const val = self.readBus(d.addr.?) & c.s;
             c.a = val;
             c.x = val;
             c.s = val;
-            self.est_cycles = 0; // TODO
+            self.est_cycles = 0; // TODO: cycle counting
         },
 
         .ign => {
