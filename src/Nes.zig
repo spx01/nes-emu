@@ -3,9 +3,6 @@ const util = @import("util.zig");
 const instr = @import("instruction.zig");
 const AnyMapper = @import("Mapper.zig");
 
-// PPU-specific functionality implemented here
-usingnamespace @import("ppu.zig");
-
 m: AnyMapper = undefined,
 cpu_ram: *[0x800]u8 = undefined,
 cpu: Cpu = undefined,
@@ -18,6 +15,26 @@ cur_cycle: u64 = 0,
 /// Estimated cycles for the currently executing instruction
 est_cycles: u8 = undefined,
 
+ppu_disarm_hack: bool = false,
+
+crossed_addr_page_hack: bool = false,
+
+fn emitCpuCycles(self: *Self, cnt: u8) void {
+    self.est_cycles += cnt;
+    if (self.ppu != null and !self.ppu_disarm_hack) {
+        for (0..cnt) |_| {
+            for (0..3) |_| {
+                self.ppu.?.*.cycle();
+            }
+        }
+    }
+}
+
+fn clearEmitCpuCyclesHack(self: *Self, cnt: u8) void {
+    self.est_cycles = 0;
+    self.emitCpuCycles(cnt);
+}
+
 pub const Ppu = struct {
     /// Palette index RAM
     pram: [0x20]u8,
@@ -27,6 +44,9 @@ pub const Ppu = struct {
     vram: [0x1000]u8,
 
     // Internal registers go here
+
+    // PPU-specific functionality implemented here
+    usingnamespace @import("ppu.zig");
 };
 
 const Self = @This();
@@ -265,7 +285,7 @@ fn readImplWide(self: *Self, addr: u16) u16 {
 
 /// Emulate reading from the bus
 fn readBus(self: *Self, addr: u16) u8 {
-    self.est_cycles += 1;
+    self.emitCpuCycles(1);
     const val = self.readImpl(addr);
     if (addr & 0xfffe == 0x4016) {
         // Controller ports only affect the lowest 5 bits
@@ -288,7 +308,7 @@ fn readBusWide(self: *Self, addr: u16) u16 {
 }
 
 fn writeBus(self: *Self, addr: u16, val: u8) void {
-    self.est_cycles += 1;
+    self.emitCpuCycles(1);
     switch (addr) {
         0...0x1fff => {
             // Read from CPU memory
@@ -431,6 +451,7 @@ fn fetchTargetAddr(
         .sta, .stx, .sty => true,
         else => op.isRmw(),
     };
+    self.crossed_addr_page_hack = false;
     switch (mode) {
         .implicit => {
             return null;
@@ -466,7 +487,7 @@ fn fetchTargetAddr(
             return self.readBusWide(iaddr);
         },
         inline .page0_x, .page0_y => |m| {
-            self.est_cycles += 1;
+            self.emitCpuCycles(1);
             const reg_val = if (m == .page0_x) c.x else c.y;
             return @as(u16, self.fetchPc() +% reg_val);
         },
@@ -480,12 +501,13 @@ fn fetchTargetAddr(
             addr +%= reg_val;
             if (force_page_cross or checkPageCross(old_addr, addr)) {
                 _ = self.readBus(old_addr);
+                self.crossed_addr_page_hack = true;
             }
 
             return addr;
         },
         .idx_ind => {
-            self.est_cycles += 1;
+            self.emitCpuCycles(1);
             const off = self.fetchPc();
             const base = off +% c.x;
             const lo = self.readBus(base);
@@ -504,6 +526,7 @@ fn fetchTargetAddr(
             addr +%= c.y;
             if (force_page_cross or checkPageCross(old_addr, addr)) {
                 _ = self.readBus(old_addr);
+                self.crossed_addr_page_hack = true;
             }
             return addr;
         },
@@ -592,19 +615,32 @@ fn execMini(
     }
 }
 
+fn isIllegalRmw(op: instr.Op) bool {
+    return switch (op) {
+        .dcp, .isc, .rla, .rra, .slo, .sre => true,
+        else => false,
+    };
+}
+
 fn exec(self: *Self, d: FullDecoded) void {
     const c = &self.cpu;
     const old_pc = c.pc;
 
     switch (d.op) {
         .brk, .jsr, .pha, .php => {
-            self.est_cycles += 1;
+            self.emitCpuCycles(1);
         },
         .pla, .plp, .rti, .rts => {
-            self.est_cycles += 2;
+            self.emitCpuCycles(2);
         },
         else => {},
     }
+
+    const is_illegal_rmw = isIllegalRmw(d.op);
+    if (is_illegal_rmw) {
+        self.ppu_disarm_hack = true;
+    }
+    defer self.ppu_disarm_hack = false;
 
     switch (d.op) {
         inline .adc, .sbc => |op| {
@@ -836,7 +872,7 @@ fn exec(self: *Self, d: FullDecoded) void {
             // return from subroutine
             c.pc = self.popStackWide() +% 1;
             // It's supposed to take 6 cycles
-            self.est_cycles += 1;
+            self.emitCpuCycles(1);
         },
 
         inline .sta, .stx, .sty => |op| {
@@ -876,6 +912,7 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         // illegal instructions
         .lax => {
+            self.ppu_disarm_hack = true;
             if (d.operand == .imm) {
                 self.execMini(&.{
                     .{ .lda, d.operand, d.addr },
@@ -887,16 +924,14 @@ fn exec(self: *Self, d: FullDecoded) void {
                     .{ .ldx, d.operand, d.addr },
                 });
             }
-            self.est_cycles = switch (d.operand) {
+            self.ppu_disarm_hack = false;
+            self.clearEmitCpuCyclesHack(switch (d.operand) {
                 .idx_ind => 6,
                 .page0 => 3,
                 .abs, .page0_y, .abs_y => 4,
-                .ind_idx => 5,
-                // nestest.log is wrong? or page crossing has to be taken into
-                // acount
-                // .ind_idx => 6,
+                .ind_idx => if (self.crossed_addr_page_hack) 6 else 5,
                 else => unreachable,
-            };
+            });
         },
         .sax => {
             self.writeBus(d.addr.?, c.a & c.x);
@@ -955,14 +990,14 @@ fn exec(self: *Self, d: FullDecoded) void {
                 .{ .@"and", d.operand, d.addr },
             });
             c.p.c = @intCast(c.a >> 7);
-            self.est_cycles = 2;
+            self.emitCpuCycles(2);
         },
         inline .alr, .arr => |op| {
             self.execMini(&.{
                 .{ .@"and", d.operand, d.addr },
                 .{ if (op == .alr) .lsr else .ror, .implicit, null },
             });
-            self.est_cycles = 2;
+            self.emitCpuCycles(2);
         },
         .xaa => {
             self.execMini(&.{
@@ -974,7 +1009,7 @@ fn exec(self: *Self, d: FullDecoded) void {
         .axs => {
             const val = self.readBus(d.addr.?);
             c.x = (c.a & c.x) -% val;
-            self.est_cycles = 2;
+            self.emitCpuCycles(2);
         },
         inline .ahx, .shx, .shy => |op| {
             const h = @as(u8, @intCast(d.addr.? >> 8)) +% 1;
@@ -999,43 +1034,43 @@ fn exec(self: *Self, d: FullDecoded) void {
 
         .ign => {
             if (d.operand == .page0_x) {
+                self.ppu_disarm_hack = true;
                 self.est_cycles -= 1;
                 // IGN d,X reads at d as well
                 _ = self.readBus(self.readImpl(c.pc -% 1));
+                self.ppu_disarm_hack = false;
             }
             _ = self.readBus(d.addr.?);
         },
     }
 
     // RMW illegal cycle counts
-    switch (d.op) {
-        .dcp, .isc, .rla, .rra, .slo, .sre => {
-            self.est_cycles = switch (d.operand) {
-                .idx_ind, .ind_idx => 8,
-                .abs_x, .abs_y => 7,
-                .abs, .page0_x => 6,
-                .page0 => 5,
-                else => unreachable,
-            };
-        },
-        else => {},
+    if (is_illegal_rmw) {
+        self.clearEmitCpuCyclesHack(switch (d.operand) {
+            .idx_ind, .ind_idx => 8,
+            .abs_x, .abs_y => 7,
+            .abs, .page0_x => 6,
+            .page0 => 5,
+            else => unreachable,
+        });
     }
 
     if (d.operand == .rel and c.pc != old_pc) {
         // Branch taken case
-        self.est_cycles += 1;
+        self.emitCpuCycles(1);
         if (checkPageCross(old_pc, c.pc)) {
-            self.est_cycles += 1;
+            self.emitCpuCycles(1);
         }
     }
 }
 
-pub fn tick(self: *Self) void {
+pub fn execNext(self: *Self) void {
+    std.debug.assert(self.ppu_disarm_hack == false);
     self.est_cycles = 0;
     self.exec(self.fetchDecode());
     if (self.est_cycles == 1) {
         // 2 cycles is the minimum
-        self.est_cycles += 1;
+        self.emitCpuCycles(1);
     }
     if (self.est_cycles == 0) {
         @panic("unfinished instruction encountered");
@@ -1058,6 +1093,6 @@ pub fn debugStuff(self: *Self) void {
         w.print("{X:04} ", .{self.cpu.pc}) catch unreachable;
         self.logStateFixed(w);
         _ = w.write("\n") catch unreachable;
-        self.tick();
+        self.execNext();
     }
 }
