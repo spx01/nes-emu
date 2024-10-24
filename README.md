@@ -1,11 +1,10 @@
-# Unnamed NES Emulator
+# ZNESTY
+
+A NES emulator implemented in the Zig programming language. (WIP)
 
 ## TODO:
 
 - [x] Core CPU logic
-- [ ] Add RESET
-- [ ] Last unofficial instruction fixes
-- [ ] Timing/cycle counting
-- [ ] Commence PPU implementation efforts
+- [X] Commence PPU implementation efforts
 - [ ] Interactive infrastructure (graphics/input)
 - [ ] Audio (TBD)
